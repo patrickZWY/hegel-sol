@@ -1,40 +1,63 @@
 # hegel-sol
 
-Property-based testing for Solidity, built on [Hegel](https://hegel.dev) (the Hypothesis
-engine behind hegel-rust, hegel-go, hegel-typescript and friends).
+Property-based testing for Solidity, built on [Hegel](https://hegel.dev) and
+[revm](https://github.com/bluealloy/revm).
 
-Experimental. Not affiliated with the Hegel or Solidity teams.
+The Phase 0 spike is complete: Solidity tests can draw values through a magic
+address, the Rust runner forwards those draws to libhegel, and failures are shrunk
+and emitted with deterministic reproduce blobs.
 
-## Idea
+## Try it
 
-Solidity test contracts draw values through a magic address:
+```sh
+cargo run -p hegel-sol -- test \
+  --root contracts \
+  --match-test transfer \
+  --seed 1 \
+  --test-cases 50 \
+  --database off
+```
+
+The included deliberately buggy token shrinks to `from = address(0)`,
+`to = address(1)`, and `amount = 3`. Replay the printed blob with:
+
+```sh
+HEGEL_SOL_REPRODUCE='<blob>' cargo run -p hegel-sol -- test --root contracts
+```
+
+Use `--help` for contract/test filtering, profiles, phases, database, JSON, and
+verbosity options.
+
+## Solidity API
+
+Inherit `HegelTest`, then draw from the exposed `hegel` interface:
 
 ```solidity
-import {HegelTest} from "hegel-sol/Hegel.sol";
+import {HegelTest} from "../src/Hegel.sol";
 
 contract TokenTest is HegelTest {
-    function test_transfer_preserves_supply() public {
-        address from = hegel.address("from");
-        address to = hegel.address("to");
-        uint256 amount = hegel.uint256("amount", 0, token.balanceOf(from));
+    function test_transfer() public {
+        address from = hegel.drawAddress("from");
+        address to = hegel.drawAddress("to");
         hegel.assume(from != to);
-        token.transfer(from, to, amount);
-        assert(token.balanceOf(from) + token.balanceOf(to) == token.totalSupply());
+        uint256 amount = hegel.drawUint256("amount", 0, 100);
+        // exercise the system and assert a property
     }
 }
 ```
 
-A Rust runner executes the contract on revm, intercepts those calls, and forwards them to
-libhegel, which does generation, shrinking, the example database and reproduce blobs.
-Failures come back as a minimal counterexample plus a blob you can replay.
+Solidity reserves names such as `uint256`, `address`, and `event`, so the API uses
+`drawUint256`, `drawAddress`, and `recordEvent` rather than the original names in
+the design sketch.
 
 ## Layout
 
-- `DESIGN.md`: architecture and the exact engine / revm API facts the runner relies on.
-- `PLAN.md`: phased implementation plan with a done-when check per step.
-- `crates/hegel-sol`: the Rust runner (skeleton only so far).
-- `contracts/`: `Hegel.sol` and sample tests (to be created in Phase 0).
+- `crates/hegel-sol`: safe Hegel FFI wrappers, artifact loader, revm harness,
+  magic-address inspector, run loop, reports, and CLI.
+- `contracts/src/Hegel.sol`: Solidity testing interface.
+- `contracts/test/ERC20Spike.t.sol`: end-to-end shrinking example.
+- `DESIGN.md` and `PLAN.md`: architecture and longer-term roadmap.
+- `NOTES.md`: observed Phase 0 results and API deviations.
 
-## Status
-
-Research complete, implementation starts at `PLAN.md` step 0.1.
+The remaining Phase 1 polish and Phases 2–4 in `PLAN.md` cover stateful testing,
+Foundry cheatcode compatibility, and ecosystem validation.

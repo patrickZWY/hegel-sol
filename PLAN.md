@@ -1,5 +1,7 @@
 # hegel-sol implementation plan
 
+> Implementation status (2026-09-15): Phase 0 is complete. Phase 1.1, 1.2, JSON/basic reporting, the default example database, and CI are implemented; remaining items are roadmap.
+
 Property-based testing for Solidity, built on Hegel (Hypothesis engine, libhegel C ABI).
 Read `DESIGN.md` first: it records the exact engine and revm API facts gathered on
 2026-09-15 so no step below needs re-research.

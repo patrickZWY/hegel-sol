@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.3.6
+      - run: forge build --root contracts
+      - run: cargo test --workspace
+      - name: Run expected-failing Solidity spike
+        shell: bash
+        run: |
+          set +e
+          cargo run -p hegel-sol -- test --root contracts --match-test transfer --seed 1 --test-cases 50 --database off
+          status=$?
+          test "$status" -eq 1
