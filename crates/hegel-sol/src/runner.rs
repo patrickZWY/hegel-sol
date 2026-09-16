@@ -1,4 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
 
 use alloy_dyn_abi::JsonAbiExt;
 use alloy_json_abi::Function;
@@ -9,6 +17,7 @@ use serde::Serialize;
 
 use crate::{
     artifacts::{self, Contract},
+    autodraw::Limits,
     engine::{Context as HegelContext, Error, Settings, Status, TestCase},
     evm::{self, Database, Harness},
     inspector::{Abort, Draw, HegelInspector},
@@ -28,6 +37,11 @@ pub struct Options {
     pub verbosity: u32,
     pub step_count: i64,
     pub show_statistics: bool,
+    pub jobs: usize,
+    pub shard: Option<Shard>,
+    pub max_array_len: u64,
+    pub max_byte_len: u64,
+    pub fail_fast: bool,
 }
 
 impl Default for Options {
@@ -45,7 +59,49 @@ impl Default for Options {
             show_statistics: false,
             phases: 31,
             verbosity: 0,
+            jobs: 1,
+            shard: None,
+            max_array_len: 8,
+            max_byte_len: 64,
+            fail_fast: false,
         }
+    }
+}
+
+impl Options {
+    fn limits(&self) -> Limits {
+        Limits {
+            max_dynamic_length: self.max_array_len,
+            max_byte_length: self.max_byte_len,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shard {
+    index: usize,
+    total: usize,
+}
+
+impl Shard {
+    pub fn new(number: usize, total: usize) -> Result<Self> {
+        if total == 0 {
+            bail!("shard count must be greater than zero");
+        }
+        if number == 0 || number > total {
+            bail!("shard number must be between 1 and {total}");
+        }
+        Ok(Self {
+            index: number - 1,
+            total,
+        })
+    }
+
+    fn contains(self, name: &str) -> bool {
+        let hash = name.bytes().fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+        hash % self.total as u64 == self.index as u64
     }
 }
 
@@ -66,76 +122,264 @@ pub struct TestReport {
     pub blob: Option<String>,
     pub trace: Vec<Draw>,
     pub console: Vec<String>,
+    pub duration_ms: u64,
 }
 
 pub fn run_project(options: &Options) -> Result<Vec<TestReport>> {
     let contracts = artifacts::build(&options.root)?;
-    let selected: Vec<_> = contracts
-        .iter()
-        .flat_map(|contract| {
-            contract.test_functions().filter_map(move |function| {
-                let contract_matches = options
-                    .match_contract
-                    .as_ref()
-                    .is_none_or(|pattern| contract.name.contains(pattern));
-                let test_matches = options
-                    .match_test
-                    .as_ref()
-                    .is_none_or(|pattern| function.name.contains(pattern));
-                (contract_matches && test_matches).then_some((contract, function))
-            })
-        })
-        .collect();
-    let stateful: Vec<_> = contracts
-        .iter()
-        .filter(|contract| {
-            let has_rules = contract.rule_functions().next().is_some();
-            let has_invariants = contract.invariant_functions().next().is_some();
-            let contract_matches = options
-                .match_contract
-                .as_ref()
-                .is_none_or(|pattern| contract.name.contains(pattern));
-            let test_matches = options.match_test.as_ref().is_none_or(|pattern| {
-                "stateful".contains(pattern)
-                    || contract
-                        .rule_functions()
-                        .any(|function| function.name.contains(pattern))
-                    || contract
-                        .invariant_functions()
-                        .any(|function| function.name.contains(pattern))
-            });
-            has_rules && has_invariants && contract_matches && test_matches
-        })
-        .collect();
-    if selected.is_empty() && stateful.is_empty() {
+    let mut discovered = discover_tests(&contracts, options);
+    if discovered.is_empty() {
         bail!("no matching Solidity tests found");
     }
+    if let Some(shard) = options.shard {
+        discovered.retain(|test| shard.contains(&test.id()));
+    }
 
-    let mut reports = Vec::new();
-    for (contract, function) in selected {
-        reports.extend(run_test(contract, function, options)?);
+    let mut prepared = BTreeMap::new();
+    for test in &discovered {
+        let contract = test.contract();
+        if !prepared.contains_key(&contract.path) {
+            prepared.insert(
+                contract.path.clone(),
+                PreparedContract::new(contract, options.step_count)?,
+            );
+        }
     }
-    for contract in stateful {
-        reports.extend(run_stateful(contract, options)?);
+    let jobs = discovered
+        .iter()
+        .map(|test| {
+            let contract = prepared
+                .get(&test.contract().path)
+                .expect("every selected contract was prepared");
+            match test {
+                DiscoveredTest::Stateless(_, function) => TestJob::Stateless(contract, function),
+                DiscoveredTest::Stateful(_) => TestJob::Stateful(contract),
+            }
+        })
+        .collect::<Vec<_>>();
+    run_jobs(&jobs, options)
+}
+
+pub fn list_project(options: &Options) -> Result<Vec<String>> {
+    let contracts = artifacts::build(&options.root)?;
+    let mut discovered = discover_tests(&contracts, options);
+    if discovered.is_empty() {
+        bail!("no matching Solidity tests found");
     }
-    Ok(reports)
+    if let Some(shard) = options.shard {
+        discovered.retain(|test| shard.contains(&test.id()));
+    }
+    Ok(discovered.into_iter().map(|test| test.name()).collect())
+}
+
+fn discover_tests<'a>(contracts: &'a [Contract], options: &Options) -> Vec<DiscoveredTest<'a>> {
+    let mut jobs = Vec::new();
+    for contract in contracts {
+        let contract_matches = options
+            .match_contract
+            .as_ref()
+            .is_none_or(|pattern| contract.name.contains(pattern));
+        if !contract_matches {
+            continue;
+        }
+        for function in contract.test_functions() {
+            let test_matches = options
+                .match_test
+                .as_ref()
+                .is_none_or(|pattern| function.name.contains(pattern));
+            if test_matches {
+                jobs.push(DiscoveredTest::Stateless(contract, function));
+            }
+        }
+        let stateful_matches = options.match_test.as_ref().is_none_or(|pattern| {
+            "stateful".contains(pattern)
+                || contract
+                    .rule_functions()
+                    .any(|function| function.name.contains(pattern))
+                || contract
+                    .invariant_functions()
+                    .any(|function| function.name.contains(pattern))
+        });
+        if stateful_matches {
+            let has_rules = contract.rule_functions().next().is_some();
+            let has_invariants = contract.invariant_functions().next().is_some();
+            if has_rules && has_invariants {
+                jobs.push(DiscoveredTest::Stateful(contract));
+            }
+        }
+    }
+    jobs
+}
+
+#[derive(Clone, Copy)]
+enum DiscoveredTest<'a> {
+    Stateless(&'a Contract, &'a Function),
+    Stateful(&'a Contract),
+}
+
+impl<'a> DiscoveredTest<'a> {
+    fn id(self) -> String {
+        match self {
+            Self::Stateless(contract, function) => format!(
+                "{}.{}:0x{}",
+                contract.name,
+                function.name,
+                hex::encode(function.selector())
+            ),
+            Self::Stateful(contract) => format!("{}.stateful", contract.name),
+        }
+    }
+
+    fn contract(self) -> &'a Contract {
+        match self {
+            Self::Stateless(contract, _) | Self::Stateful(contract) => contract,
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            Self::Stateless(contract, function) => format!("{}.{}", contract.name, function.name),
+            Self::Stateful(contract) => format!("{}.stateful", contract.name),
+        }
+    }
+}
+
+struct PreparedContract<'a> {
+    contract: &'a Contract,
+    address: Address,
+    base: Database,
+    setup: Option<Bytes>,
+    step_count: i64,
+}
+
+impl<'a> PreparedContract<'a> {
+    fn new(contract: &'a Contract, default_step_count: i64) -> Result<Self> {
+        let mut harness = Harness::new();
+        let address = harness.deploy(contract.bytecode.clone())?;
+        let mut step_count = default_step_count;
+        if let Some(function) = contract
+            .abi
+            .function("stepCount")
+            .and_then(|functions| functions.iter().find(|function| function.inputs.is_empty()))
+        {
+            let calldata = Bytes::copy_from_slice(function.selector().as_slice());
+            // Probe on a clone so even a non-view stepCount implementation cannot
+            // mutate the snapshot shared by the actual tests.
+            let mut probe = harness.clone();
+            let result = probe.call(address, calldata)?;
+            if let Some(output) = result.output()
+                && output.len() >= 32
+                && let Ok(value) = i64::try_from(U256::from_be_slice(&output[..32]))
+                && value > 0
+            {
+                step_count = value;
+            }
+        }
+        let setup = contract
+            .abi
+            .function("setUp")
+            .and_then(|functions| functions.iter().find(|function| function.inputs.is_empty()))
+            .map(|function| Bytes::copy_from_slice(function.selector().as_slice()));
+        Ok(Self {
+            contract,
+            address,
+            base: harness.snapshot(),
+            setup,
+            step_count,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TestJob<'a> {
+    Stateless(&'a PreparedContract<'a>, &'a Function),
+    Stateful(&'a PreparedContract<'a>),
+}
+
+impl TestJob<'_> {
+    fn run(self, options: &Options) -> Result<Vec<TestReport>> {
+        let started = Instant::now();
+        let result = match self {
+            Self::Stateless(contract, function) => run_test(contract, function, options),
+            Self::Stateful(contract) => run_stateful(contract, options),
+        };
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        result.map(|mut reports| {
+            for report in &mut reports {
+                report.duration_ms = elapsed;
+            }
+            reports
+        })
+    }
+}
+
+fn run_jobs(jobs: &[TestJob<'_>], options: &Options) -> Result<Vec<TestReport>> {
+    let workers = options.jobs.max(1).min(jobs.len().max(1));
+    if workers == 1 {
+        let mut reports = Vec::new();
+        for job in jobs {
+            let job_reports = job.run(options)?;
+            let failed = job_reports
+                .iter()
+                .any(|report| matches!(report.status, TestStatus::Failed));
+            reports.extend(job_reports);
+            if options.fail_fast && failed {
+                break;
+            }
+        }
+        return Ok(reports);
+    }
+
+    let next = AtomicUsize::new(0);
+    let stopped = AtomicBool::new(false);
+    let completed = Mutex::new(Vec::with_capacity(jobs.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(job) = jobs.get(index) else {
+                        break;
+                    };
+                    let result = job.run(options);
+                    let failed = match &result {
+                        Err(_) => true,
+                        Ok(reports) => reports
+                            .iter()
+                            .any(|report| matches!(report.status, TestStatus::Failed)),
+                    };
+                    if options.fail_fast && failed {
+                        stopped.store(true, Ordering::Release);
+                    }
+                    completed
+                        .lock()
+                        .expect("test result lock poisoned")
+                        .push((index, result));
+                }
+            });
+        }
+    });
+
+    let mut completed = completed.into_inner().expect("test result lock poisoned");
+    completed.sort_by_key(|(index, _)| *index);
+    completed
+        .into_iter()
+        .try_fold(Vec::new(), |mut reports, (_, result)| {
+            reports.extend(result?);
+            Ok(reports)
+        })
 }
 
 fn run_test(
-    contract: &Contract,
+    prepared: &PreparedContract<'_>,
     function: &Function,
     options: &Options,
 ) -> Result<Vec<TestReport>> {
+    let contract = prepared.contract;
     let test_name = format!("{}.{}", contract.name, function.name);
-    let mut harness = Harness::new();
-    let address = harness.deploy(contract.bytecode.clone())?;
-    let base = harness.snapshot();
-    let setup = contract
-        .abi
-        .function("setUp")
-        .and_then(|functions| functions.iter().find(|function| function.inputs.is_empty()))
-        .map(|function| Bytes::copy_from_slice(function.selector().as_slice()));
-
     let ctx = HegelContext::new();
     let mut settings = match options.profile.as_deref() {
         Some(profile) => Settings::for_profile(&ctx, profile)?,
@@ -152,14 +396,30 @@ fn run_test(
 
     if let Some(blob) = &options.reproduce {
         let mut tc = settings.test_case_from_blob(blob)?;
-        let execution = execute_case(&base, address, setup.as_ref(), contract, function, &tc)?;
+        let execution = execute_case(
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
+            contract,
+            function,
+            &tc,
+            options.limits(),
+        )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
         return Ok(vec![execution.report(test_name, Some(blob.clone()))]);
     }
 
     let mut run = settings.start_run()?;
     while let Some(mut tc) = run.next_test_case()? {
-        let execution = execute_case(&base, address, setup.as_ref(), contract, function, &tc)?;
+        let execution = execute_case(
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
+            contract,
+            function,
+            &tc,
+            options.limits(),
+        )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
     }
     let result = run.result()?;
@@ -178,11 +438,20 @@ fn run_test(
                 blob: None,
                 console: Vec::new(),
                 trace: Vec::new(),
+                duration_ms: 0,
             });
             continue;
         };
         let mut tc = settings.test_case_from_blob(blob_value)?;
-        let execution = execute_case(&base, address, setup.as_ref(), contract, function, &tc)?;
+        let execution = execute_case(
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
+            contract,
+            function,
+            &tc,
+            options.limits(),
+        )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
         reports.push(execution.report(test_name.clone(), blob));
     }
@@ -194,6 +463,7 @@ fn run_test(
             console: Vec::new(),
             blob: None,
             trace: Vec::new(),
+            duration_ms: 0,
         });
     }
     Ok(reports)
@@ -221,6 +491,7 @@ impl CaseExecution {
             origin: self.origin,
             blob,
             trace: self.trace,
+            duration_ms: 0,
         }
     }
 }
@@ -232,8 +503,9 @@ fn execute_case(
     contract: &Contract,
     function: &Function,
     tc: &TestCase,
+    limits: Limits,
 ) -> Result<CaseExecution> {
-    let (calldata, mut auto_trace) = match crate::autodraw::calldata(function, tc) {
+    let (calldata, mut auto_trace) = match crate::autodraw::calldata(function, tc, limits) {
         Ok(prepared) => prepared,
         Err(Error::Stop(_)) => {
             return Ok(CaseExecution {
@@ -304,19 +576,6 @@ fn inspected_call(
     .map_err(|error| anyhow!("EVM transaction failed: {error:?}"))
 }
 
-fn classify(result: ExecutionResult) -> (Status, Option<String>) {
-    match result {
-        ExecutionResult::Success { .. } => (Status::Valid, None),
-        ExecutionResult::Revert { output, .. } => {
-            let reason = decode_revert(&output);
-            (Status::Interesting, Some(reason))
-        }
-        ExecutionResult::Halt { reason, .. } => {
-            (Status::Interesting, Some(format!("EVM halt: {reason:?}")))
-        }
-    }
-}
-
 fn classify_with_abi(result: ExecutionResult, contract: &Contract) -> (Status, Option<String>) {
     match result {
         ExecutionResult::Success { .. } => (Status::Valid, None),
@@ -384,35 +643,35 @@ pub fn database_argument(root: &Path, value: &str) -> String {
     }
 }
 
-fn run_stateful(contract: &Contract, options: &Options) -> Result<Vec<TestReport>> {
+#[derive(Clone, Copy)]
+struct StatefulConfig<'a> {
+    contract: &'a Contract,
+    step_count: i64,
+    limits: Limits,
+}
+
+impl<'a> StatefulConfig<'a> {
+    fn invariant<'b>(self, phase: Option<&'b str>) -> InvariantConfig<'a, 'b> {
+        InvariantConfig {
+            contract: self.contract,
+            limits: self.limits,
+            phase,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InvariantConfig<'a, 'b> {
+    contract: &'a Contract,
+    limits: Limits,
+    phase: Option<&'b str>,
+}
+
+fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Vec<TestReport>> {
+    let contract = prepared.contract;
     let test_name = format!("{}.stateful", contract.name);
     let rules: Vec<_> = contract.rule_functions().collect();
     let invariants: Vec<_> = contract.invariant_functions().collect();
-    let mut harness = Harness::new();
-    let address = harness.deploy(contract.bytecode.clone())?;
-    let mut step_count = options.step_count;
-    if let Some(function) = contract
-        .abi
-        .function("stepCount")
-        .and_then(|functions| functions.iter().find(|function| function.inputs.is_empty()))
-    {
-        let calldata = Bytes::copy_from_slice(function.selector().as_slice());
-        let result = harness.call(address, calldata)?;
-        if let Some(output) = result.output()
-            && output.len() >= 32
-            && let Ok(value) = i64::try_from(U256::from_be_slice(&output[..32]))
-            && value > 0
-        {
-            step_count = value;
-        }
-    }
-    let base = harness.snapshot();
-    let setup = contract
-        .abi
-        .function("setUp")
-        .and_then(|functions| functions.iter().find(|function| function.inputs.is_empty()))
-        .map(|function| Bytes::copy_from_slice(function.selector().as_slice()));
-
     let ctx = HegelContext::new();
     let mut settings = match options.profile.as_deref() {
         Some(profile) => Settings::for_profile(&ctx, profile)?,
@@ -427,16 +686,22 @@ fn run_stateful(contract: &Contract, options: &Options) -> Result<Vec<TestReport
         .set_verbosity(options.verbosity)?
         .set_print_blob(false)?;
 
+    let config = StatefulConfig {
+        contract,
+        step_count: prepared.step_count,
+        limits: options.limits(),
+    };
+
     if let Some(blob) = &options.reproduce {
         let mut tc = settings.test_case_from_blob(blob)?;
         let execution = execute_stateful_case(
-            &base,
-            address,
-            setup.as_ref(),
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
             &rules,
             &invariants,
             &tc,
-            step_count,
+            config,
         )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
         return Ok(vec![execution.report(test_name, Some(blob.clone()))]);
@@ -445,13 +710,13 @@ fn run_stateful(contract: &Contract, options: &Options) -> Result<Vec<TestReport
     let mut run = settings.start_run()?;
     while let Some(mut tc) = run.next_test_case()? {
         let execution = execute_stateful_case(
-            &base,
-            address,
-            setup.as_ref(),
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
             &rules,
             &invariants,
             &tc,
-            step_count,
+            config,
         )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
     }
@@ -471,18 +736,19 @@ fn run_stateful(contract: &Contract, options: &Options) -> Result<Vec<TestReport
                 blob: None,
                 trace: Vec::new(),
                 console: Vec::new(),
+                duration_ms: 0,
             });
             continue;
         };
         let mut tc = settings.test_case_from_blob(blob_value)?;
         let execution = execute_stateful_case(
-            &base,
-            address,
-            setup.as_ref(),
+            &prepared.base,
+            prepared.address,
+            prepared.setup.as_ref(),
             &rules,
             &invariants,
             &tc,
-            step_count,
+            config,
         )?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
         reports.push(execution.report(test_name.clone(), blob));
@@ -495,6 +761,7 @@ fn run_stateful(contract: &Contract, options: &Options) -> Result<Vec<TestReport
             blob: None,
             trace: Vec::new(),
             console: Vec::new(),
+            duration_ms: 0,
         });
     }
     Ok(reports)
@@ -507,7 +774,7 @@ fn execute_stateful_case(
     rules: &[&Function],
     invariants: &[&Function],
     tc: &TestCase,
-    step_count: i64,
+    config: StatefulConfig<'_>,
 ) -> Result<CaseExecution> {
     let mut db = base.clone();
     let mut inspector = HegelInspector::new(tc);
@@ -516,7 +783,7 @@ fn execute_stateful_case(
     if let Some(setup) = setup {
         let result = inspected_call(&mut db, &mut inspector, address, setup.clone())?;
         if let Some(execution) =
-            stateful_abort_or_failure(&mut inspector, result, &mut trace, "setUp")?
+            stateful_abort_or_failure(&mut inspector, result, &mut trace, config.contract, "setUp")?
         {
             return Ok(execution);
         }
@@ -528,7 +795,7 @@ fn execute_stateful_case(
         invariants,
         tc,
         &mut trace,
-        None,
+        config.invariant(None),
     )? {
         return Ok(execution);
     }
@@ -543,11 +810,16 @@ fn execute_stateful_case(
         .collect::<Vec<_>>();
     let groups = vec![0; rules.len()];
     let always = vec![false; invariants.len()];
-    let machine =
-        match tc.new_state_machine(&rule_names, &groups, &invariant_names, &always, step_count) {
-            Ok(machine) => machine,
-            Err(error) => return engine_case(error, inspector, trace),
-        };
+    let machine = match tc.new_state_machine(
+        &rule_names,
+        &groups,
+        &invariant_names,
+        &always,
+        config.step_count,
+    ) {
+        Ok(machine) => machine,
+        Err(error) => return engine_case(error, inspector, trace),
+    };
     debug_assert_eq!(machine.concurrency(), 1);
 
     loop {
@@ -563,7 +835,7 @@ fn execute_stateful_case(
                 invariants,
                 tc,
                 &mut trace,
-                None,
+                config.invariant(None),
             )? {
                 return Ok(execution);
             }
@@ -580,7 +852,7 @@ fn execute_stateful_case(
                 .get(index)
                 .ok_or_else(|| anyhow!("Hegel selected unknown rule index {index}"))?;
             tc.start_span(&format!("hegel.sol.rule.{}", function.name))?;
-            let (calldata, drawn) = match generated_calldata(function, tc)? {
+            let (calldata, drawn) = match generated_calldata(function, tc, config.limits)? {
                 Ok(prepared) => prepared,
                 Err(status) => {
                     let _ = tc.stop_span(true);
@@ -608,7 +880,7 @@ fn execute_stateful_case(
                 Some(Abort::Error(message)) => return Err(anyhow!(message)),
                 None => tc.stop_span(false)?,
             }
-            let (status, origin) = classify(result);
+            let (status, origin) = classify_with_abi(result, config.contract);
             if status != Status::Valid {
                 return Ok(finish_case(
                     inspector,
@@ -632,7 +904,7 @@ fn execute_stateful_case(
                     &invariants[index..=index],
                     tc,
                     &mut trace,
-                    Some("sampled"),
+                    config.invariant(Some("sampled")),
                 )?
             {
                 return Ok(execution);
@@ -648,10 +920,10 @@ fn check_invariants(
     invariants: &[&Function],
     tc: &TestCase,
     trace: &mut Vec<Draw>,
-    phase: Option<&str>,
+    config: InvariantConfig<'_, '_>,
 ) -> Result<Option<CaseExecution>> {
     for function in invariants {
-        let (calldata, drawn) = match generated_calldata(function, tc)? {
+        let (calldata, drawn) = match generated_calldata(function, tc, config.limits)? {
             Ok(prepared) => prepared,
             Err(status) => {
                 return Ok(Some(finish_case_from(inspector, trace, status, None)));
@@ -663,7 +935,8 @@ fn check_invariants(
             inspector,
             result,
             trace,
-            &phase.map_or_else(
+            config.contract,
+            &config.phase.map_or_else(
                 || function.name.clone(),
                 |phase| format!("{} ({phase})", function.name),
             ),
@@ -678,6 +951,7 @@ fn stateful_abort_or_failure(
     inspector: &mut HegelInspector<'_>,
     result: ExecutionResult,
     trace: &mut Vec<Draw>,
+    contract: &Contract,
     label: &str,
 ) -> Result<Option<CaseExecution>> {
     match inspector.outcome.take() {
@@ -695,7 +969,7 @@ fn stateful_abort_or_failure(
         ))),
         Some(Abort::Error(message)) => Err(anyhow!(message)),
         None => {
-            let (status, origin) = classify(result);
+            let (status, origin) = classify_with_abi(result, contract);
             if status == Status::Valid {
                 Ok(None)
             } else {
@@ -713,8 +987,9 @@ fn stateful_abort_or_failure(
 fn generated_calldata(
     function: &Function,
     tc: &TestCase,
+    limits: Limits,
 ) -> Result<std::result::Result<(Bytes, Vec<Draw>), Status>> {
-    match crate::autodraw::calldata(function, tc) {
+    match crate::autodraw::calldata(function, tc, limits) {
         Ok(prepared) => Ok(Ok(prepared)),
         Err(Error::Stop(_)) => Ok(Err(Status::Overrun)),
         Err(Error::Assume) => Ok(Err(Status::Invalid)),

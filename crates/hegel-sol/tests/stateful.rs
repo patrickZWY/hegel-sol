@@ -16,6 +16,11 @@ fn options(contract: &str) -> Options {
         verbosity: 1,
         step_count: 50,
         show_statistics: false,
+        jobs: 1,
+        shard: None,
+        max_array_len: 8,
+        max_byte_len: 64,
+        fail_fast: false,
     }
 }
 
@@ -40,4 +45,18 @@ fn stateful_pool_reuses_runtime_values() {
     let reports = run_project(&options).unwrap();
     assert_eq!(reports.len(), 1);
     assert!(matches!(reports[0].status, TestStatus::Passed));
+}
+
+#[test]
+fn stateful_custom_errors_are_decoded() {
+    let mut options = options("InvariantErrorTest");
+    options.test_cases = 1;
+    let reports = run_project(&options).unwrap();
+
+    assert_eq!(reports.len(), 1);
+    assert!(matches!(reports[0].status, TestStatus::Failed));
+    assert_eq!(
+        reports[0].origin.as_deref(),
+        Some("invariant_custom_error: BrokenInvariant(7)")
+    );
 }

@@ -38,7 +38,40 @@ HEGEL_SOL_REPRODUCE='<blob>' cargo run -p hegel-sol -- test --root contracts
 ```
 
 Use `--help` for contract/test filters, profiles, phases, database selection, stateful
-step count, statistics, JSON, and verbosity.
+step count, statistics, JSON, verbosity, and scaling controls.
+
+## Scaling a private test suite
+
+Run independent tests concurrently, split them deterministically across CI workers, and
+raise or lower generated collection sizes:
+
+```sh
+# Local parallelism; reports remain in deterministic discovery order.
+hegel-sol test --root contracts --jobs 8
+
+# Two CI workers running stable, disjoint subsets.
+hegel-sol test --root contracts --shard 1/2
+hegel-sol test --root contracts --shard 2/2
+
+# Explore larger dynamic values when the contract needs them.
+hegel-sol test --root contracts --max-array-len 32 --max-byte-len 256
+
+# Inspect discovery or shard placement without running tests.
+hegel-sol test --root contracts --shard 1/2 --list
+
+# Stop scheduling after a failure and show per-test durations.
+hegel-sol test --root contracts --jobs 8 --fail-fast --show-timings
+```
+
+Sharding happens per discovered stateless test or stateful contract. Artifact discovery
+uses Foundry's current compilation cache, so contracts left behind in `out/` after a
+rename or deletion are not accidentally executed.
+
+Selected contracts are deployed once and their clean post-deployment snapshots are
+shared across independent test jobs. `--fail-fast` prevents new work from being
+scheduled after a failure; tests already running in other workers are allowed to finish.
+JSON reports include `duration_ms`, while text output always ends with a wall-clock
+status summary.
 
 ## Solidity API
 
@@ -99,5 +132,6 @@ coupling to Foundry's internal fuzz and invariant executors.
 - `contracts/test`: shrinking, auto-draw, stateful, pool, and compatibility examples.
 - `DESIGN.md`, `PLAN.md`, and `NOTES.md`: architecture, status, and implementation notes.
 
-Phases 0–3 are implemented. Phase 4's ecosystem/community validation is intentionally
-deferred while this remains an individual project.
+Phases 0–3 and the first private-suite scaling milestone are implemented. Broader
+ecosystem/community work is intentionally deferred while this remains an individual
+project.

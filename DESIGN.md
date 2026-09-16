@@ -1,7 +1,8 @@
 # hegel-sol design notes
 
-Property-based testing for Solidity, built on Hegel (Hypothesis). Status: research done,
-no runner code written yet. Research date: 2026-09-15.
+Property-based testing for Solidity, built on Hegel (Hypothesis). This document records
+the research snapshot from 2026-09-15; the standalone runner described below is now
+implemented.
 
 ## Core constraint
 

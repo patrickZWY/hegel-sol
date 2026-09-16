@@ -11,10 +11,26 @@ use crate::{
     inspector::Draw,
 };
 
-const MAX_DYNAMIC_LENGTH: u64 = 8;
-const MAX_BYTE_LENGTH: u64 = 64;
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub max_dynamic_length: u64,
+    pub max_byte_length: u64,
+}
 
-pub fn calldata(function: &Function, tc: &TestCase) -> Result<(Bytes, Vec<Draw>), Error> {
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_dynamic_length: 8,
+            max_byte_length: 64,
+        }
+    }
+}
+
+pub fn calldata(
+    function: &Function,
+    tc: &TestCase,
+    limits: Limits,
+) -> Result<(Bytes, Vec<Draw>), Error> {
     let mut values = Vec::with_capacity(function.inputs.len());
     let mut trace = Vec::with_capacity(function.inputs.len());
     for (index, parameter) in function.inputs.iter().enumerate() {
@@ -27,7 +43,7 @@ pub fn calldata(function: &Function, tc: &TestCase) -> Result<(Bytes, Vec<Draw>)
             .resolve()
             .map_err(|error| Error::Engine(error.to_string()))?;
         tc.start_span(&format!("hegel.sol.argument.{name}"))?;
-        let value = match draw_value(&ty, tc) {
+        let value = match draw_value(&ty, tc, limits) {
             Ok(value) => value,
             Err(error) => {
                 let _ = tc.stop_span(true);
@@ -48,7 +64,7 @@ pub fn calldata(function: &Function, tc: &TestCase) -> Result<(Bytes, Vec<Draw>)
     Ok((Bytes::from(encoded), trace))
 }
 
-fn draw_value(ty: &DynSolType, tc: &TestCase) -> Result<DynSolValue, Error> {
+fn draw_value(ty: &DynSolType, tc: &TestCase, limits: Limits) -> Result<DynSolValue, Error> {
     match ty {
         DynSolType::Bool => Ok(DynSolValue::Bool(tc.boolean(0.5)?)),
         DynSolType::Uint(bits) => {
@@ -86,9 +102,9 @@ fn draw_value(ty: &DynSolType, tc: &TestCase) -> Result<DynSolValue, Error> {
             word[..*size].copy_from_slice(&bytes);
             Ok(DynSolValue::FixedBytes(word, *size))
         }
-        DynSolType::Bytes => Ok(DynSolValue::Bytes(tc.bytes(0, MAX_BYTE_LENGTH)?)),
+        DynSolType::Bytes => Ok(DynSolValue::Bytes(tc.bytes(0, limits.max_byte_length)?)),
         DynSolType::String => {
-            let bytes = tc.bytes(0, MAX_BYTE_LENGTH)?;
+            let bytes = tc.bytes(0, limits.max_byte_length)?;
             let text: String = bytes
                 .into_iter()
                 .map(|byte| char::from(32 + byte % 95))
@@ -96,22 +112,25 @@ fn draw_value(ty: &DynSolType, tc: &TestCase) -> Result<DynSolValue, Error> {
             Ok(DynSolValue::String(text))
         }
         DynSolType::Array(inner) => {
-            let len = tc.integer(0, MAX_DYNAMIC_LENGTH as i64)? as usize;
+            let max = i64::try_from(limits.max_dynamic_length).map_err(|_| {
+                Error::Engine("maximum dynamic-array length does not fit i64".into())
+            })?;
+            let len = tc.integer(0, max)? as usize;
             let values = (0..len)
-                .map(|_| draw_value(inner, tc))
+                .map(|_| draw_value(inner, tc, limits))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(DynSolValue::Array(values))
         }
         DynSolType::FixedArray(inner, len) => {
             let values = (0..*len)
-                .map(|_| draw_value(inner, tc))
+                .map(|_| draw_value(inner, tc, limits))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(DynSolValue::FixedArray(values))
         }
         DynSolType::Tuple(types) => {
             let values = types
                 .iter()
-                .map(|ty| draw_value(ty, tc))
+                .map(|ty| draw_value(ty, tc, limits))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(DynSolValue::Tuple(values))
         }

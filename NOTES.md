@@ -57,3 +57,26 @@ Completed on 2026-09-15.
   magic-address shim gives this individual project a stable integration boundary.
 
 Phase 4 ecosystem/community validation remains deferred.
+
+# Private-suite scaling
+
+Implemented on 2026-09-16.
+
+- Independent tests can run concurrently with deterministic report ordering.
+- Stable test-name hashing supports disjoint CI shards without a central manifest.
+- Dynamic ABI array and byte/string limits are configurable instead of hard-coded.
+- Artifact discovery follows Foundry's current cache. This fixed a concrete issue where
+  a renamed contract remained under `out/` and was still discovered as a test.
+- Stateful rule and invariant failures now decode ABI custom errors.
+- Solidity-backed integration tests cover bounded generation, parallel scheduling,
+  sharding, stale-artifact exclusion, and stateful diagnostics.
+- Selected contracts are now deployed once per project run. Stateless functions and the
+  stateful machine share the same immutable post-deployment snapshot while each generated
+  case still clones isolated state.
+- List mode reuses filtering and stable shard assignment without deploying contracts.
+- Fail-fast scheduling works in sequential and parallel modes; already-running workers
+  complete normally so no thread is forcibly cancelled.
+- JSON reports include per-test milliseconds and text mode prints a wall-clock summary.
+
+External ecosystem and community validation remains deferred in favor of scaling this
+project's own test workload.

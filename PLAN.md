@@ -1,7 +1,7 @@
 # hegel-sol implementation plan
 
 > Implementation status (2026-09-15): Phases 0–3 are complete in the standalone runner.
-> Phase 4 ecosystem/community validation is intentionally deferred for this individual project.
+> Phase 4 private-suite scaling is active; Phase 5 community validation is intentionally deferred.
 
 Property-based testing for Solidity, built on Hegel (Hypothesis engine, libhegel C ABI).
 Read `DESIGN.md` first: it records the exact engine and revm API facts gathered on
@@ -181,13 +181,42 @@ Native upstream integration remains an optional future distribution path.
 
 ---
 
-## Phase 4: ecosystem/community proof — deferred
+## Phase 4: private-suite scaling — active
 
-### 4.1 Zoo
+### 4.1 Execution foundations — complete
+- `--jobs N` executes independent stateless tests and stateful contracts concurrently
+  while retaining deterministic report order.
+- `--shard NUMBER/TOTAL` partitions tests with a stable hash for distributed CI.
+- `--max-array-len` and `--max-byte-len` make ABI generation breadth configurable.
+- Artifact discovery reads Foundry's current compilation cache so stale renamed or
+  deleted contract JSON is ignored.
+- Stateful failures decode contract custom errors through the same path as stateless
+  failures.
+
+### 4.2 Runtime reuse and observability — complete
+- Each selected contract is deployed once; its immutable post-deployment database
+  snapshot and discovered `setUp()` selector are shared by all of its test jobs.
+- `--list` shows filtered and sharded discovery without EVM execution.
+- `--fail-fast` stops sequential runs immediately and prevents parallel workers from
+  claiming new jobs after a failure.
+- Reports include per-test durations and text runs end with a wall-clock summary.
+
+### 4.3 Scale against this project's own contracts
+- Benchmark larger case counts, state-machine depths, and generated collections; optimize
+  per-case database snapshots only where measurements justify it.
+- Extend Foundry cheatcodes, console overloads, forked-state support, and environment
+  controls when the project's real tests require them.
+- Add source-mapped failure locations and stabilize the JSON report schema for CI tooling.
+
+---
+
+## Phase 5: ecosystem/community proof — deferred
+
+### 5.1 Zoo
 - Run against OpenZeppelin Contracts, Solady, Uniswap v2. Record bugs found, false
   positives, and run time. Contribute a `solidity/` entry to hegel-zoo if results hold.
 
-### 4.2 Antithesis
+### 5.2 Antithesis
 - Set `hegel_settings_set_test_location` per test and run under the `workload`
   profile; verify assertions appear in Antithesis output.
 

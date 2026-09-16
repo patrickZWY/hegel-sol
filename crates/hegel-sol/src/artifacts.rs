@@ -1,13 +1,17 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 
 use alloy_json_abi::JsonAbi;
 use anyhow::{Context as _, Result, bail};
 use revm::primitives::Bytes;
 use serde::Deserialize;
+
+static BUILD_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone)]
 pub struct Contract {
@@ -48,7 +52,28 @@ struct ArtifactBytecode {
     object: String,
 }
 
+#[derive(Deserialize)]
+struct ArtifactCache {
+    paths: CachePaths,
+    files: BTreeMap<String, CachedSource>,
+}
+
+#[derive(Deserialize)]
+struct CachePaths {
+    artifacts: PathBuf,
+}
+
+#[derive(Deserialize)]
+struct CachedSource {
+    artifacts: BTreeMap<String, serde_json::Value>,
+}
+
 pub fn build(root: &Path) -> Result<Vec<Contract>> {
+    // Foundry rewrites its cache during a build. Keep in-process callers from
+    // reading that cache while another build is still replacing it.
+    let _guard = BUILD_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let output = Command::new("forge")
         .args(["build", "--root"])
         .arg(root)
@@ -64,10 +89,7 @@ pub fn build(root: &Path) -> Result<Vec<Contract>> {
 }
 
 pub fn load(root: &Path) -> Result<Vec<Contract>> {
-    let out = root.join("out");
-    let mut files = Vec::new();
-    visit_json(&out, &mut files)
-        .with_context(|| format!("failed to read Foundry artifacts under {}", out.display()))?;
+    let files = current_artifact_files(root)?;
     let mut contracts = Vec::new();
     for path in files {
         let text = fs::read_to_string(&path)?;
@@ -101,24 +123,74 @@ pub fn load(root: &Path) -> Result<Vec<Contract>> {
     Ok(contracts)
 }
 
-fn visit_json(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            visit_json(&path, files)?;
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            files.push(path);
+fn current_artifact_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let cache_path = root.join("cache/solidity-files-cache.json");
+    let text = fs::read_to_string(&cache_path)
+        .with_context(|| format!("failed to read Foundry cache {}", cache_path.display()))?;
+    let cache: ArtifactCache = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse Foundry cache {}", cache_path.display()))?;
+    let artifact_root = root.join(&cache.paths.artifacts);
+    let mut relative_paths = Vec::new();
+    for source in cache.files.values() {
+        for artifact in source.artifacts.values() {
+            collect_artifact_paths(artifact, &mut relative_paths);
         }
     }
-    Ok(())
+    relative_paths.sort();
+    relative_paths.dedup();
+    Ok(relative_paths
+        .into_iter()
+        .map(|path| artifact_root.join(path))
+        .collect())
+}
+
+fn collect_artifact_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(path) = object.get("path").and_then(serde_json::Value::as_str) {
+                paths.push(path.to_owned());
+            } else {
+                for value in object.values() {
+                    collect_artifact_paths(value, paths);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_artifact_paths(value, paths);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_paths_come_from_the_current_foundry_cache() {
+        let root = std::env::temp_dir().join(format!("hegel-sol-artifacts-{}", std::process::id()));
+        fs::create_dir_all(root.join("cache")).unwrap();
+        fs::write(
+            root.join("cache/solidity-files-cache.json"),
+            r#"{
+                "paths": {"artifacts": "generated"},
+                "files": {
+                    "test/Current.t.sol": {
+                        "artifacts": {
+                            "Current": {"0.8.30": {"default": {"path": "Current.t.sol/Current.json"}}}
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let files = current_artifact_files(&root).unwrap();
+        assert_eq!(files, [root.join("generated/Current.t.sol/Current.json")]);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn loads_spike_contract_and_test_selector() {

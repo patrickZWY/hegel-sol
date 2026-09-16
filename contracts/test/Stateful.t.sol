@@ -50,3 +50,17 @@ contract PoolStatefulTest is HegelTest {
         assert(pool == 0);
     }
 }
+
+contract InvariantErrorTest {
+    error BrokenInvariant(uint256 actual);
+
+    function rule_noop() public pure {}
+
+    function invariant_custom_error() public pure {
+        revert BrokenInvariant(7);
+    }
+
+    function stepCount() public pure returns (uint256) {
+        return 1;
+    }
+}

@@ -2,10 +2,11 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::ExitCode,
+    time::Instant,
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use hegel_sol::runner::{Options, TestReport, TestStatus, run_project};
+use hegel_sol::runner::{Options, Shard, TestReport, TestStatus, list_project, run_project};
 
 #[derive(Parser)]
 #[command(
@@ -50,10 +51,31 @@ struct TestArgs {
     verbosity: Verbosity,
     #[arg(long)]
     json: bool,
+    /// List selected tests without deploying or executing them.
+    #[arg(long)]
+    list: bool,
+    /// Stop scheduling tests after the first failure.
+    #[arg(long)]
+    fail_fast: bool,
+    /// Show individual test durations.
+    #[arg(long)]
+    show_timings: bool,
     #[arg(long, default_value_t = 50)]
     step_count: i64,
     #[arg(long)]
     show_statistics: bool,
+    /// Number of Solidity tests to execute concurrently.
+    #[arg(long, default_value_t = 1, value_parser = parse_jobs)]
+    jobs: usize,
+    /// Run one deterministic shard, written as NUMBER/TOTAL (for example 2/4).
+    #[arg(long, value_parser = parse_shard)]
+    shard: Option<Shard>,
+    /// Maximum generated length for dynamic arrays.
+    #[arg(long, default_value_t = 8)]
+    max_array_len: u64,
+    /// Maximum generated length for bytes and strings.
+    #[arg(long, default_value_t = 64)]
+    max_byte_len: u64,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -122,12 +144,31 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         reproduce,
         phases: args.phases,
         verbosity: args.verbosity.ffi(),
+        jobs: args.jobs,
+        shard: args.shard,
+        max_array_len: args.max_array_len,
+        max_byte_len: args.max_byte_len,
+        fail_fast: args.fail_fast,
     };
+    if args.list {
+        let tests = list_project(&options)?;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&tests)?);
+        } else {
+            for test in tests {
+                println!("{test}");
+            }
+        }
+        return Ok(false);
+    }
+
+    let started = Instant::now();
     let reports = run_project(&options)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&reports)?);
     } else {
-        print_reports(&reports, args.show_statistics);
+        print_reports(&reports, args.show_statistics, args.show_timings);
+        print_summary(&reports, started.elapsed().as_millis());
     }
     Ok(reports
         .iter()
@@ -143,14 +184,19 @@ fn resolve_database(root: &Path, value: &str) -> String {
     }
 }
 
-fn print_reports(reports: &[TestReport], show_statistics: bool) {
+fn print_reports(reports: &[TestReport], show_statistics: bool, show_timings: bool) {
     for report in reports {
+        let timing = if show_timings {
+            format!(" ({} ms)", report.duration_ms)
+        } else {
+            String::new()
+        };
         match report.status {
-            TestStatus::Passed => println!("PASS {}", report.test),
-            TestStatus::Invalid => println!("INVALID {}", report.test),
-            TestStatus::Overrun => println!("OVERRUN {}", report.test),
+            TestStatus::Passed => println!("PASS {}{timing}", report.test),
+            TestStatus::Invalid => println!("INVALID {}{timing}", report.test),
+            TestStatus::Overrun => println!("OVERRUN {}{timing}", report.test),
             TestStatus::Failed => {
-                println!("FAIL {}", report.test);
+                println!("FAIL {}{timing}", report.test);
                 if let Some(origin) = &report.origin {
                     println!("  {origin}");
                 }
@@ -189,6 +235,24 @@ fn print_reports(reports: &[TestReport], show_statistics: bool) {
     }
 }
 
+fn print_summary(reports: &[TestReport], elapsed_ms: u128) {
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut invalid = 0;
+    let mut overrun = 0;
+    for report in reports {
+        match report.status {
+            TestStatus::Passed => passed += 1,
+            TestStatus::Failed => failed += 1,
+            TestStatus::Invalid => invalid += 1,
+            TestStatus::Overrun => overrun += 1,
+        }
+    }
+    println!(
+        "\n{passed} passed; {failed} failed; {invalid} invalid; {overrun} overrun; {elapsed_ms} ms"
+    );
+}
+
 fn parse_phases(value: &str) -> Result<u32, String> {
     if value.eq_ignore_ascii_case("all") {
         return Ok(31);
@@ -205,4 +269,27 @@ fn parse_phases(value: &str) -> Result<u32, String> {
         };
     }
     Ok(mask)
+}
+
+fn parse_shard(value: &str) -> Result<Shard, String> {
+    let (number, total) = value
+        .split_once('/')
+        .ok_or_else(|| "shard must use NUMBER/TOTAL, for example 2/4".to_owned())?;
+    let number = number
+        .parse::<usize>()
+        .map_err(|_| "shard number must be a positive integer".to_owned())?;
+    let total = total
+        .parse::<usize>()
+        .map_err(|_| "shard count must be a positive integer".to_owned())?;
+    Shard::new(number, total).map_err(|error| error.to_string())
+}
+
+fn parse_jobs(value: &str) -> Result<usize, String> {
+    let jobs = value
+        .parse::<usize>()
+        .map_err(|_| "jobs must be a positive integer".to_owned())?;
+    if jobs == 0 {
+        return Err("jobs must be greater than zero".to_owned());
+    }
+    Ok(jobs)
 }

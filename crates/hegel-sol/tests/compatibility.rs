@@ -16,6 +16,11 @@ fn options(contract: &str) -> Options {
         verbosity: 1,
         step_count: 50,
         show_statistics: false,
+        jobs: 1,
+        shard: None,
+        max_array_len: 8,
+        max_byte_len: 64,
+        fail_fast: false,
     }
 }
 
