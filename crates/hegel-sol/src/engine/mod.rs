@@ -6,18 +6,22 @@ use std::{
 };
 
 use hegel_c::{
-    HegelContext, HegelFailure, HegelRun, HegelRunResult, HegelSettings, HegelTestCase,
-    hegel_event, hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
-    hegel_generate_boolean, hegel_generate_bytes, hegel_generate_bytes_result_free,
-    hegel_generate_bytes_result_t, hegel_generate_integer, hegel_generate_integer_big,
-    hegel_label_from_name, hegel_mark_complete, hegel_next_test_case, hegel_note, hegel_run_free,
-    hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
-    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
-    hegel_run_start, hegel_run_status_t, hegel_settings_free, hegel_settings_new,
-    hegel_settings_new_for_profile, hegel_settings_set_database, hegel_settings_set_database_key,
-    hegel_settings_set_phases, hegel_settings_set_print_blob, hegel_settings_set_seed,
-    hegel_settings_set_test_cases, hegel_settings_set_verbosity, hegel_start_span, hegel_status_t,
-    hegel_stop_span, hegel_target, hegel_test_case_free, hegel_test_case_from_blob,
+    HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelPool, HegelRun, HegelRunResult,
+    HegelSettings, HegelStateMachine, HegelTestCase, hegel_event, hegel_failure_free,
+    hegel_failure_origin, hegel_failure_reproduction_blob, hegel_generate_boolean,
+    hegel_generate_bytes, hegel_generate_bytes_result_free, hegel_generate_bytes_result_t,
+    hegel_generate_integer, hegel_generate_integer_big, hegel_label_from_name, hegel_mark_complete,
+    hegel_new_pool, hegel_new_state_machine, hegel_next_test_case, hegel_note, hegel_pool_add,
+    hegel_pool_free, hegel_pool_generate, hegel_run_free, hegel_run_result, hegel_run_result_error,
+    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
+    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
+    hegel_settings_new, hegel_settings_new_for_profile, hegel_settings_set_database,
+    hegel_settings_set_database_key, hegel_settings_set_phases, hegel_settings_set_print_blob,
+    hegel_settings_set_seed, hegel_settings_set_test_cases, hegel_settings_set_verbosity,
+    hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
+    hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
+    hegel_state_machine_should_check_invariant, hegel_status_t, hegel_stop_span, hegel_target,
+    hegel_test_case_free, hegel_test_case_from_blob,
 };
 
 pub mod integer;
@@ -407,6 +411,77 @@ impl TestCase {
         self.ctx.check(rc)
     }
 
+    pub fn new_pool(&self) -> Result<Pool> {
+        let mut raw = ptr::null_mut();
+        let rc = unsafe { hegel_new_pool(self.ctx.raw(), self.raw(), &mut raw) };
+        self.ctx.check(rc)?;
+        Ok(Pool {
+            ctx: self.ctx.clone(),
+            raw: NonNull::new(raw)
+                .ok_or_else(|| Error::Engine("libhegel returned a null pool handle".into()))?,
+        })
+    }
+
+    pub fn new_state_machine(
+        &self,
+        rule_names: &[&str],
+        rule_groups: &[i64],
+        invariant_names: &[&str],
+        invariant_always_check: &[bool],
+        step_count: i64,
+    ) -> Result<StateMachine> {
+        if rule_names.len() != rule_groups.len() {
+            return Err(Error::Engine(
+                "state-machine rule names and groups have different lengths".into(),
+            ));
+        }
+        if invariant_names.len() != invariant_always_check.len() {
+            return Err(Error::Engine(
+                "state-machine invariant names and flags have different lengths".into(),
+            ));
+        }
+        let rules = rule_names
+            .iter()
+            .map(|name| CString::new(*name))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let rule_ptrs = rules.iter().map(|name| name.as_ptr()).collect::<Vec<_>>();
+        let invariants = invariant_names
+            .iter()
+            .map(|name| CString::new(*name))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let invariant_ptrs = invariants
+            .iter()
+            .map(|name| name.as_ptr())
+            .collect::<Vec<_>>();
+        let mut raw = ptr::null_mut();
+        let mut concurrency = 0;
+        let rc = unsafe {
+            hegel_new_state_machine(
+                self.ctx.raw(),
+                self.raw(),
+                rule_ptrs.as_ptr(),
+                rule_groups.as_ptr(),
+                rule_ptrs.len(),
+                invariant_ptrs.as_ptr(),
+                invariant_always_check.as_ptr(),
+                invariant_ptrs.len(),
+                1,
+                1,
+                step_count,
+                &mut raw,
+                &mut concurrency,
+            )
+        };
+        self.ctx.check(rc)?;
+        Ok(StateMachine {
+            ctx: self.ctx.clone(),
+            raw: NonNull::new(raw).ok_or_else(|| {
+                Error::Engine("libhegel returned a null state-machine handle".into())
+            })?,
+            concurrency,
+        })
+    }
+
     pub fn mark_complete(&mut self, status: Status, origin: Option<&str>) -> Result<()> {
         let origin = origin.map(CString::new).transpose()?;
         let rc = unsafe {
@@ -430,6 +505,117 @@ impl Drop for TestCase {
         }
         unsafe {
             let _ = hegel_test_case_free(self.ctx.raw(), self.raw());
+        }
+    }
+}
+
+pub struct Pool {
+    ctx: Context,
+    raw: NonNull<HegelPool>,
+}
+
+impl Pool {
+    pub fn add(&self, tc: &TestCase) -> Result<i64> {
+        let mut id = 0;
+        let rc = unsafe { hegel_pool_add(self.ctx.raw(), tc.raw(), self.raw.as_ptr(), &mut id) };
+        self.ctx.check(rc)?;
+        Ok(id)
+    }
+
+    pub fn generate(&self, tc: &TestCase, consume: bool) -> Result<i64> {
+        let mut id = 0;
+        let rc = unsafe {
+            hegel_pool_generate(
+                self.ctx.raw(),
+                tc.raw(),
+                self.raw.as_ptr(),
+                consume,
+                &mut id,
+            )
+        };
+        self.ctx.check(rc)?;
+        Ok(id)
+    }
+}
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = hegel_pool_free(self.ctx.raw(), self.raw.as_ptr());
+        }
+    }
+}
+
+pub struct StateMachine {
+    ctx: Context,
+    raw: NonNull<HegelStateMachine>,
+    concurrency: i64,
+}
+
+impl StateMachine {
+    pub fn concurrency(&self) -> i64 {
+        self.concurrency
+    }
+
+    pub fn next_group(&self, tc: &TestCase) -> Result<Option<i64>> {
+        let mut group = HEGEL_STATE_MACHINE_DONE;
+        let rc = unsafe {
+            hegel_state_machine_next_group(self.ctx.raw(), tc.raw(), self.raw.as_ptr(), &mut group)
+        };
+        self.ctx.check(rc)?;
+        Ok((group != HEGEL_STATE_MACHINE_DONE).then_some(group))
+    }
+
+    pub fn next_rule(&self, tc: &TestCase, worker: i64) -> Result<Option<usize>> {
+        let mut rule = HEGEL_STATE_MACHINE_DONE;
+        let rc = unsafe {
+            hegel_state_machine_next_rule(
+                self.ctx.raw(),
+                tc.raw(),
+                self.raw.as_ptr(),
+                worker,
+                &mut rule,
+            )
+        };
+        self.ctx.check(rc)?;
+        if rule == HEGEL_STATE_MACHINE_DONE {
+            Ok(None)
+        } else {
+            usize::try_from(rule)
+                .map(Some)
+                .map_err(|_| Error::Engine(format!("invalid state-machine rule index {rule}")))
+        }
+    }
+
+    pub fn rule_rejected(&self, tc: &TestCase, worker: i64) -> Result<()> {
+        let rc = unsafe {
+            hegel_state_machine_rule_rejected(self.ctx.raw(), tc.raw(), self.raw.as_ptr(), worker)
+        };
+        self.ctx.check(rc)
+    }
+
+    pub fn should_check_invariant(&self, tc: &TestCase, index: usize) -> Result<bool> {
+        let mut should_check = false;
+        let index = i64::try_from(index)
+            .map_err(|_| Error::Engine("invariant index does not fit i64".into()))?;
+        let rc = unsafe {
+            hegel_state_machine_should_check_invariant(
+                self.ctx.raw(),
+                tc.raw(),
+                self.raw.as_ptr(),
+                index,
+                &mut should_check,
+            )
+        };
+        self.ctx.check(rc)?;
+        Ok(should_check)
+    }
+}
+
+impl Drop for StateMachine {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = hegel_state_machine_free(self.ctx.raw(), self.raw.as_ptr());
         }
     }
 }

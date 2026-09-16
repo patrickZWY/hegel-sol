@@ -2,26 +2,41 @@
 pragma solidity ^0.8.20;
 
 address constant HEGEL = address(uint160(uint256(keccak256("hegel.sol"))));
+address constant HEVM = address(uint160(uint256(keccak256("hevm cheat code"))));
 
 interface IHegel {
+    /// @notice Draw an auto-named unsigned integer in the inclusive range [lo, hi].
+    function drawUint256(uint256 lo, uint256 hi) external returns (uint256);
     /// @notice Draw an unsigned integer in the inclusive range [lo, hi].
     function drawUint256(string calldata name, uint256 lo, uint256 hi) external returns (uint256);
 
+    /// @notice Draw an auto-named signed integer in the inclusive range [lo, hi].
+    function drawInt256(int256 lo, int256 hi) external returns (int256);
     /// @notice Draw a signed integer in the inclusive range [lo, hi].
     function drawInt256(string calldata name, int256 lo, int256 hi) external returns (int256);
 
+    /// @notice Draw an auto-named boolean with equal probability.
+    function drawBool() external returns (bool);
     /// @notice Draw a boolean with equal probability.
     function drawBool(string calldata name) external returns (bool);
 
+    /// @notice Draw an auto-named address.
+    function drawAddress() external returns (address);
     /// @notice Draw an address.
     function drawAddress(string calldata name) external returns (address);
 
+    /// @notice Draw 32 auto-named bytes.
+    function drawBytes32() external returns (bytes32);
     /// @notice Draw exactly 32 bytes.
     function drawBytes32(string calldata name) external returns (bytes32);
 
+    /// @notice Draw auto-named bytes with an inclusive length range.
+    function drawBytes(uint256 minLen, uint256 maxLen) external returns (bytes memory);
     /// @notice Draw bytes with an inclusive length range.
     function drawBytes(string calldata name, uint256 minLen, uint256 maxLen) external returns (bytes memory);
 
+    /// @notice Draw an auto-named string no longer than maxLen bytes.
+    function drawString(uint256 maxLen) external returns (string memory);
     /// @notice Draw a string no longer than maxLen bytes.
     function drawString(string calldata name, uint256 maxLen) external returns (string memory);
 
@@ -42,8 +57,42 @@ interface IHegel {
 
     /// @notice Record a label for end-of-run statistics.
     function recordEvent(string calldata label) external;
+
+    /// @notice Create a variable pool and return its case-local identifier.
+    function poolNew(string calldata name) external returns (uint256 id);
+
+    /// @notice Add a value to a variable pool.
+    function poolAdd(uint256 id, bytes32 value) external;
+
+    /// @notice Pick a previously added value, optionally consuming it.
+    function poolPick(uint256 id, bool consume) external returns (bytes32 value);
+}
+
+/// @notice Foundry-compatible cheatcodes supported by the hegel-sol runner.
+interface IHegelVm {
+    /// @notice Set msg.sender for the next external call.
+    function prank(address sender) external;
+    /// @notice Set msg.sender for subsequent external calls.
+    function startPrank(address sender) external;
+    /// @notice Clear a persistent prank.
+    function stopPrank() external;
+    /// @notice Set an account's native balance.
+    function deal(address account, uint256 balance) external;
+    /// @notice Set block.timestamp.
+    function warp(uint256 timestamp) external;
+    /// @notice Set block.number.
+    function roll(uint256 number) external;
+    /// @notice Require the next external call to revert.
+    function expectRevert() external;
+    /// @notice Require the next external call to revert with matching data.
+    function expectRevert(bytes calldata revertData) external;
+    /// @notice Associate a diagnostic label with an address.
+    function label(address account, string calldata label) external;
+    /// @notice Reject the current generated example unless condition is true.
+    function assume(bool condition) external;
 }
 
 abstract contract HegelTest {
     IHegel internal constant hegel = IHegel(HEGEL);
+    IHegelVm internal constant vm = IHegelVm(HEVM);
 }

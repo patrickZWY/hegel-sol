@@ -1,6 +1,7 @@
 # hegel-sol implementation plan
 
-> Implementation status (2026-09-15): Phase 0 is complete. Phase 1.1, 1.2, JSON/basic reporting, the default example database, and CI are implemented; remaining items are roadmap.
+> Implementation status (2026-09-15): Phases 0–3 are complete in the standalone runner.
+> Phase 4 ecosystem/community validation is intentionally deferred for this individual project.
 
 Property-based testing for Solidity, built on Hegel (Hypothesis engine, libhegel C ABI).
 Read `DESIGN.md` first: it records the exact engine and revm API facts gathered on
@@ -99,7 +100,7 @@ minimal example and prints a reproduce blob that replays.
 
 ---
 
-## Phase 1: usable CLI
+## Phase 1: usable CLI — complete
 
 ### 1.1 `hegel-sol test` CLI (clap)
 - Flags: `--root`, `--match-contract`, `--match-test`, `--test-cases N`, `--seed`,
@@ -135,7 +136,7 @@ minimal example and prints a reproduce blob that replays.
 
 ---
 
-## Phase 2: stateful testing
+## Phase 2: stateful testing — complete
 
 ### 2.1 Rule and invariant discovery
 - Test contract exposes `rule_*` functions and `invariant_*` functions.
@@ -162,7 +163,7 @@ minimal example and prints a reproduce blob that replays.
 
 ---
 
-## Phase 3: Foundry integration
+## Phase 3: Foundry integration — complete for the standalone runner
 
 ### 3.1 forge-std compatibility shim
 - Implement enough `vm.*` cheatcodes to run typical forge tests: `prank`, `startPrank`,
@@ -174,9 +175,13 @@ minimal example and prints a reproduce blob that replays.
 - Prototype a `forge test --fuzzer hegel` fork branch that swaps forge's fuzz and
   invariant executors for the hegel-sol runner. Evaluate effort vs. the shim.
 
+Decision: keep the revm runner and compatibility shim. A Foundry fork would couple this
+individual project to unstable internal executor APIs without adding engine capability.
+Native upstream integration remains an optional future distribution path.
+
 ---
 
-## Phase 4: ecosystem proof
+## Phase 4: ecosystem/community proof — deferred
 
 ### 4.1 Zoo
 - Run against OpenZeppelin Contracts, Solady, Uniswap v2. Record bugs found, false

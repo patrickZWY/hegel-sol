@@ -15,6 +15,8 @@ fn auto_draws_scalars_arrays_and_structs() {
         reproduce: None,
         phases: 31,
         verbosity: 1,
+        step_count: 50,
+        show_statistics: false,
     })
     .unwrap();
     assert_eq!(reports.len(), 3);

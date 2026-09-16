@@ -34,3 +34,26 @@ The emitted `HEGEL_SOL_REPRODUCE` blob replays the same panic and draw trace.
 
 For the small spike, cloning the post-deployment `CacheDB` for each case is simple and
 fast enough. No journal-discard optimization is warranted yet.
+
+# Phases 1–3 results
+
+Completed on 2026-09-15.
+
+- ABI auto-draw recursively covers scalars, dynamic and fixed arrays, and tuples. Named
+  and auto-named Solidity draws share the same engine stream.
+- Stateful contracts are discovered from `rule_*` and `invariant_*`. The runner checks
+  initial/final invariants unconditionally, samples join points through the Hegel state
+  machine, rejects assumed-away rules without consuming a step, and spans each rule so
+  shrinking removes whole calls. The counter sample shrinks to `mint(1), burn(1)`.
+- Pools keep Hegel's stable variable ids separate from Solidity `bytes32` values. Empty
+  picks become rejected assumptions; consuming picks remove the host value.
+- The compatibility inspector handles the selected Foundry VM calls in-process. `warp`
+  and `roll` update the active revm block, `deal` journals its balance change, pranks
+  rewrite the next call frame, and expected reverts are resolved in `call_end`.
+- Failure replay now decodes ABI custom errors and captures common `console.log`
+  overloads. JSON includes the same console and trace data as text reports.
+- A native Foundry fork was evaluated but not retained: it would duplicate the working
+  revm executor and require continuous synchronization with Foundry internals. The
+  magic-address shim gives this individual project a stable integration boundary.
+
+Phase 4 ecosystem/community validation remains deferred.

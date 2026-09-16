@@ -121,7 +121,7 @@ fn draw_value(ty: &DynSolType, tc: &TestCase) -> Result<DynSolValue, Error> {
     }
 }
 
-fn format_value(value: &DynSolValue) -> String {
+pub(crate) fn format_value(value: &DynSolValue) -> String {
     match value {
         DynSolValue::Bool(value) => value.to_string(),
         DynSolValue::Int(value, _) => value.to_string(),

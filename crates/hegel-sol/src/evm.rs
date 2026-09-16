@@ -30,10 +30,16 @@ impl Harness {
                 ..Default::default()
             },
         );
-        db.insert_account_info(
+        for address in [
             crate::inspector::hegel_address(),
-            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from_static(&[0x00]))),
-        );
+            crate::inspector::hevm_address(),
+            crate::inspector::console_address(),
+        ] {
+            db.insert_account_info(
+                address,
+                AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from_static(&[0x00]))),
+            );
+        }
         Self {
             db,
             caller: DEFAULT_CALLER,

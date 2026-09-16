@@ -23,6 +23,18 @@ impl Contract {
             .functions()
             .filter(|function| function.name.starts_with("test"))
     }
+
+    pub fn rule_functions(&self) -> impl Iterator<Item = &alloy_json_abi::Function> {
+        self.abi
+            .functions()
+            .filter(|function| function.name.starts_with("rule_"))
+    }
+
+    pub fn invariant_functions(&self) -> impl Iterator<Item = &alloy_json_abi::Function> {
+        self.abi
+            .functions()
+            .filter(|function| function.name.starts_with("invariant_"))
+    }
 }
 
 #[derive(Deserialize)]

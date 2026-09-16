@@ -50,6 +50,10 @@ struct TestArgs {
     verbosity: Verbosity,
     #[arg(long)]
     json: bool,
+    #[arg(long, default_value_t = 50)]
+    step_count: i64,
+    #[arg(long)]
+    show_statistics: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -112,6 +116,8 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         test_cases: args.test_cases,
         seed: args.seed,
         database,
+        step_count: args.step_count,
+        show_statistics: args.show_statistics,
         profile: args.profile,
         reproduce,
         phases: args.phases,
@@ -121,7 +127,7 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
     if args.json {
         println!("{}", serde_json::to_string_pretty(&reports)?);
     } else {
-        print_reports(&reports);
+        print_reports(&reports, args.show_statistics);
     }
     Ok(reports
         .iter()
@@ -137,7 +143,7 @@ fn resolve_database(root: &Path, value: &str) -> String {
     }
 }
 
-fn print_reports(reports: &[TestReport]) {
+fn print_reports(reports: &[TestReport], show_statistics: bool) {
     for report in reports {
         match report.status {
             TestStatus::Passed => println!("PASS {}", report.test),
@@ -151,10 +157,31 @@ fn print_reports(reports: &[TestReport]) {
                 if !report.trace.is_empty() {
                     println!("  minimal counterexample:");
                     for draw in &report.trace {
-                        println!("    {} {} = {};", draw.kind, draw.name, draw.value);
+                        match draw.kind.as_str() {
+                            "rule" => println!("    {}();", draw.name),
+                            "event" => {}
+                            _ => println!("    {} {} = {};", draw.kind, draw.name, draw.value),
+                        }
                     }
                 }
+                for line in &report.console {
+                    println!("  {line}");
+                }
                 if let Some(blob) = &report.blob {
+                    if show_statistics {
+                        let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+                        for event in report.trace.iter().filter(|draw| draw.kind == "event") {
+                            *counts.entry(&event.name).or_default() += 1;
+                        }
+                        println!("  statistics:");
+                        if counts.is_empty() {
+                            println!("    no events in reported example");
+                        } else {
+                            for (event, count) in counts {
+                                println!("    {event}: {count}");
+                            }
+                        }
+                    }
                     println!("  reproduce: HEGEL_SOL_REPRODUCE={blob} hegel-sol test");
                 }
             }

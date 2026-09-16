@@ -16,6 +16,8 @@ fn solidity_spike_shrinks_and_replays() {
         reproduce: None,
         phases: 31,
         verbosity: 1,
+        step_count: 50,
+        show_statistics: false,
     };
     let reports = run_project(&options).unwrap();
     assert_eq!(reports.len(), 1);
