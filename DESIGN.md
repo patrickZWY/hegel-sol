@@ -94,3 +94,39 @@ Compile with `forge build` and read `out/<File>.sol/<Contract>.json` (abi + byte
 2. Stateful machines, pools, spans, targeting.
 3. Foundry integration (forge flag or drop-in shim for unchanged forge-std tests).
 4. hegel-zoo entry (OpenZeppelin, Solady, Uniswap v2) and Antithesis wiring.
+
+## Decoupling seams (2026-09-19)
+
+Solidity the language moves slowly; the toolchain around it does not. The volatile
+inputs are Foundry's internal build cache, solc's artifact and source-map encodings,
+and Foundry's cheatcode surface — none of which carry compatibility guarantees. Three
+boundaries isolate them:
+
+- `artifacts::Project` is where a build tool is known. `FoundryProject` runs `forge
+  build` and reads Foundry's cache; when that cache is missing or unparseable the loader
+  warns and scans the artifact directory instead. Losing the cache costs stale-artifact
+  exclusion, not the ability to run.
+- `sourcemap::SourceResolver` is where solc's debug output is decoded, and it answers
+  with `Option`. A malformed source-map entry truncates the map, an unreadable source
+  file costs that file's line numbers, and `NoSources` covers a project with no debug
+  information at all. A format change costs precision, never a run.
+- `protocol` is the host-call wire format: one table mapping a selector to an operation
+  and its parameter types, decoded by `alloy-dyn-abi`. Selectors are hashed once rather
+  than per comparison per call, and the crate holds no second implementation of the ABI
+  specification. `PROTOCOL_VERSION` is checked against the project's `Hegel.sol` before
+  any test runs.
+
+`discovery::Conventions` holds the name prefixes that decide what a test is, so the
+convention is a value rather than scattered literals.
+
+The layering is `engine` (generator FFI) under `evm` + `inspector` + `protocol` (an EVM
+host, which knows nothing about Solidity source) under `artifacts` + `sourcemap` (solc
+and Foundry) under `runner`. A frontend for another EVM language would replace only the
+last two layers.
+
+## Coverage-guided generation
+
+The inspector records the basic blocks an example enters, keyed by contract address and
+offset, and the runner reports the count to `hegel_target`. Collection is limited to
+`JUMPDEST` so the per-opcode hook stays cheap; measured cost on the stateful benchmark is
+within noise. `--no-coverage-target` disables it.

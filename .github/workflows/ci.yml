@@ -41,9 +41,9 @@ jobs:
         with:
           version: v1.3.6
       - name: Check formatting
-        run: forge fmt --root contracts --check
+        run: forge fmt --root contracts --check && forge fmt --root fixtures --check
       - name: Build contracts
-        run: forge build --root contracts
+        run: forge build --root contracts && forge build --root fixtures
 
   tests:
     name: Tests

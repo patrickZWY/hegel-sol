@@ -1,6 +1,10 @@
 pub mod artifacts;
 pub mod autodraw;
+pub mod discovery;
 pub mod engine;
 pub mod evm;
 pub mod inspector;
+pub mod protocol;
 pub mod runner;
+pub mod sourcemap;
+pub mod values;

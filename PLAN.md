@@ -1,7 +1,8 @@
 # hegel-sol implementation plan
 
-> Implementation status (2026-09-15): Phases 0–3 are complete in the standalone runner.
-> Phase 4 private-suite scaling is active; Phase 5 community validation is intentionally deferred.
+> Implementation status (2026-09-19): Phases 0–3 are complete in the standalone runner.
+> Phase 4 private-suite scaling and Phase 5 decoupling are complete; Phase 6 community
+> validation is intentionally deferred.
 
 Property-based testing for Solidity, built on Hegel (Hypothesis engine, libhegel C ABI).
 Read `DESIGN.md` first: it records the exact engine and revm API facts gathered on
@@ -201,22 +202,56 @@ Native upstream integration remains an optional future distribution path.
   claiming new jobs after a failure.
 - Reports include per-test durations and text runs end with a wall-clock summary.
 
-### 4.3 Scale against this project's own contracts
-- Benchmark larger case counts, state-machine depths, and generated collections; optimize
-  per-case database snapshots only where measurements justify it.
+### 4.3 Failure diagnostics and CI contract — complete
+- Failure replays resolve the final top-level revert/halt program counter through Foundry's
+  deployed source map and report a project-relative Solidity path, line, and column.
+- `--json` emits a versioned execution-report envelope with aggregate counts and elapsed
+  time. Versioning rules and stable fields are documented in `REPORTING.md`.
+
+### 4.4 Workload measurement — complete
+- `scripts/benchmark.sh` exercises configurable large generated collections and state-machine
+  depth in release mode. Current measurements do not justify replacing isolated per-case
+  `CacheDB` clones.
+
+### 4.5 Compatibility growth — active
 - Extend Foundry cheatcodes, console overloads, forked-state support, and environment
   controls when the project's real tests require them.
-- Add source-mapped failure locations and stabilize the JSON report schema for CI tooling.
 
 ---
 
-## Phase 5: ecosystem/community proof — deferred
+## Phase 5: decoupling and search quality — complete
 
-### 5.1 Zoo
+### 5.1 Toolchain seams
+- `artifacts::Project` isolates the build tool; an unreadable Foundry cache degrades to
+  scanning the artifact directory with a warning instead of failing the run.
+- `sourcemap::SourceResolver` isolates solc's debug output behind an `Option`.
+- `protocol` holds the host-call wire format as one selector table decoded by
+  `alloy-dyn-abi`, replacing a per-call chain of keccak comparisons and a hand-rolled
+  ABI codec.
+- `Hegel.sol` carries `HEGEL_PROTOCOL_VERSION`; the runner refuses a mismatched copy by
+  name before executing anything.
+- `discovery::Conventions` makes the discovery prefixes configurable.
+
+### 5.2 Search quality
+- Basic-block coverage is reported to the engine as a target score.
+- Stateful handlers are called from several accounts; the counterexample names each
+  sender.
+- `--allow-rule-reverts` treats a reverting handler as a rejected step, matching
+  Foundry's default invariant behaviour.
+- `hegel.note` output reaches the report; `target` accepts a label so unrelated scores
+  do not share one objective.
+- A reproduce blob applied to more than one test is refused rather than replayed into
+  vacuous passes.
+
+---
+
+## Phase 6: ecosystem/community proof — deferred
+
+### 6.1 Zoo
 - Run against OpenZeppelin Contracts, Solady, Uniswap v2. Record bugs found, false
   positives, and run time. Contribute a `solidity/` entry to hegel-zoo if results hold.
 
-### 5.2 Antithesis
+### 6.2 Antithesis
 - Set `hegel_settings_set_test_location` per test and run under the `workload`
   profile; verify assertions appear in Antithesis output.
 

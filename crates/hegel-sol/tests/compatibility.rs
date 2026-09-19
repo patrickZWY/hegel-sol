@@ -1,47 +1,62 @@
-use std::path::PathBuf;
+mod support;
 
-use hegel_sol::runner::{Options, TestStatus, run_project};
+use hegel_sol::runner::{Options, run_project};
+use support::{contracts, only, options};
 
-fn options(contract: &str) -> Options {
-    Options {
-        root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts"),
-        match_contract: Some(contract.into()),
-        match_test: None,
+/// Unmodified forge-std tests reach the runner through Foundry's cheatcode
+/// address, so the emulated subset has to behave as those tests expect.
+#[test]
+fn the_emulated_foundry_cheatcodes_behave_as_forge_tests_expect() {
+    let execution = run_project(&Options {
         test_cases: 1,
-        seed: Some(1),
-        database: Some(String::new()),
-        profile: None,
-        reproduce: None,
-        phases: 31,
-        verbosity: 1,
-        step_count: 50,
-        show_statistics: false,
-        jobs: 1,
-        shard: None,
-        max_array_len: 8,
-        max_byte_len: 64,
-        fail_fast: false,
-    }
-}
+        ..options(contracts(), "CompatibilityTest")
+    })
+    .unwrap();
 
-#[test]
-fn foundry_cheatcodes_execute() {
-    let reports = run_project(&options("CompatibilityTest")).unwrap();
-    assert_eq!(reports.len(), 1);
-    assert!(matches!(reports[0].status, TestStatus::Passed));
-}
-
-#[test]
-fn custom_errors_and_console_are_reported() {
-    let reports = run_project(&options("CustomErrorTest")).unwrap();
-    assert_eq!(reports.len(), 1);
-    assert!(matches!(reports[0].status, TestStatus::Failed));
     assert!(
-        reports[0]
+        !execution.failed(),
+        "{:?}",
+        only(&execution).origin.as_deref()
+    );
+}
+
+/// A failure report is only actionable if it names the error and points at the
+/// line that raised it.
+#[test]
+fn a_failure_is_reported_with_its_decoded_error_and_source_line() {
+    let execution = run_project(&Options {
+        test_cases: 1,
+        ..options(contracts(), "CustomErrorTest")
+    })
+    .unwrap();
+    let report = only(&execution);
+
+    assert!(execution.failed());
+    assert!(
+        report
             .origin
             .as_deref()
-            .unwrap()
-            .starts_with("WrongValue(7,")
+            .is_some_and(|origin| origin.starts_with("WrongValue(7,")),
+        "custom error arguments must be decoded, got {:?}",
+        report.origin
     );
-    assert_eq!(reports[0].console, ["console.log: about to fail"]);
+    assert_eq!(report.console, ["console.log: about to fail"]);
+
+    // Assert the reported position by reading it back, so the test tracks the
+    // failing statement rather than a line number that moves whenever anything
+    // above it is edited.
+    let source = report.source.as_ref().expect("a mapped source location");
+    assert_eq!(source.path, "test/Compatibility.t.sol");
+    let line = std::fs::read_to_string(contracts().join(&source.path))
+        .unwrap()
+        .lines()
+        .nth(source.line - 1)
+        .expect("the reported line exists")
+        .to_owned();
+    assert!(
+        line.contains("revert WrongValue"),
+        "reported {}:{} but that line reads {line:?}",
+        source.path,
+        source.line
+    );
 }

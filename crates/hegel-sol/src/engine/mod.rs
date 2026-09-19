@@ -339,6 +339,11 @@ impl TestCase {
             )
         };
         self.ctx.check(rc)?;
+        // libhegel writes the value's minimal encoding and sign-fills the rest of
+        // the buffer, so the whole buffer reads back as the drawn value. Keeping
+        // all `cap` bytes (rather than truncating to `len`) is what makes the
+        // fixed-width 33-byte decoders correct for negative values.
+        let _ = len;
         Ok(out)
     }
 
@@ -399,8 +404,11 @@ impl TestCase {
         self.ctx.check(rc)
     }
 
-    pub fn target(&self, value: f64) -> Result<()> {
-        let label = c"hegel.sol.target";
+    /// Report a score for the engine to maximise. Scores under distinct labels
+    /// form independent objectives, so callers that track unrelated quantities
+    /// must not share one.
+    pub fn target(&self, label: &str, value: f64) -> Result<()> {
+        let label = CString::new(label)?;
         let rc = unsafe { hegel_target(self.ctx.raw(), self.raw(), value, label.as_ptr()) };
         self.ctx.check(rc)
     }
@@ -729,7 +737,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn engine_finds_and_shrinks_integer_failure() {
+    fn engine_shrinks_a_failing_integer_to_the_boundary() {
         let ctx = Context::new();
         let mut settings = Settings::new(&ctx).unwrap();
         settings
@@ -752,13 +760,17 @@ mod tests {
         }
         let result = run.result().unwrap();
         assert_eq!(result.failure_count().unwrap(), 1);
-        assert!(
-            result
-                .failure(0)
-                .unwrap()
-                .reproduction_blob()
-                .unwrap()
-                .is_some()
-        );
+
+        // Replaying the blob is the only way a frontend can observe the shrunk
+        // example, so assert the engine reached the smallest failing value
+        // rather than merely that it failed somewhere.
+        let blob = result
+            .failure(0)
+            .unwrap()
+            .reproduction_blob()
+            .unwrap()
+            .expect("a failure carries a reproduction blob");
+        let tc = settings.test_case_from_blob(&blob).unwrap();
+        assert_eq!(tc.integer(0, 100).unwrap(), 11);
     }
 }

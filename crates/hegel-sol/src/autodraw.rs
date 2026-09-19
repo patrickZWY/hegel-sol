@@ -1,6 +1,6 @@
 use alloy_dyn_abi::{DynSolType, DynSolValue, JsonAbiExt, Specifier};
 use alloy_json_abi::Function;
-use alloy_primitives::{Address, B256, I256, U256, hex};
+use alloy_primitives::{Address, B256, I256, U256};
 use revm::primitives::Bytes;
 
 use crate::{
@@ -9,6 +9,7 @@ use crate::{
         integer::{i256_from_le_signed, i256_to_le_signed, u256_from_le_signed, u256_to_le_signed},
     },
     inspector::Draw,
+    values::{self, format_value},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -89,8 +90,10 @@ fn draw_value(ty: &DynSolType, tc: &TestCase, limits: Limits) -> Result<DynSolVa
             Ok(DynSolValue::Int(value, *bits))
         }
         DynSolType::Address => {
-            let max = (U256::from(1) << 160) - U256::from(1);
-            let raw = tc.integer_big(&u256_to_le_signed(U256::ZERO), &u256_to_le_signed(max))?;
+            let raw = tc.integer_big(
+                &u256_to_le_signed(U256::ZERO),
+                &u256_to_le_signed(values::address_max()),
+            )?;
             let value = u256_from_le_signed(&raw)
                 .ok_or_else(|| Error::Engine("invalid address from Hegel".into()))?;
             let word = value.to_be_bytes::<32>();
@@ -103,14 +106,9 @@ fn draw_value(ty: &DynSolType, tc: &TestCase, limits: Limits) -> Result<DynSolVa
             Ok(DynSolValue::FixedBytes(word, *size))
         }
         DynSolType::Bytes => Ok(DynSolValue::Bytes(tc.bytes(0, limits.max_byte_length)?)),
-        DynSolType::String => {
-            let bytes = tc.bytes(0, limits.max_byte_length)?;
-            let text: String = bytes
-                .into_iter()
-                .map(|byte| char::from(32 + byte % 95))
-                .collect();
-            Ok(DynSolValue::String(text))
-        }
+        DynSolType::String => Ok(DynSolValue::String(values::printable_string(
+            tc.bytes(0, limits.max_byte_length)?,
+        ))),
         DynSolType::Array(inner) => {
             let max = i64::try_from(limits.max_dynamic_length).map_err(|_| {
                 Error::Engine("maximum dynamic-array length does not fit i64".into())
@@ -137,38 +135,5 @@ fn draw_value(ty: &DynSolType, tc: &TestCase, limits: Limits) -> Result<DynSolVa
         DynSolType::Function => Err(Error::Engine(
             "Solidity function-pointer arguments are not supported".into(),
         )),
-    }
-}
-
-pub(crate) fn format_value(value: &DynSolValue) -> String {
-    match value {
-        DynSolValue::Bool(value) => value.to_string(),
-        DynSolValue::Int(value, _) => value.to_string(),
-        DynSolValue::Uint(value, _) => value.to_string(),
-        DynSolValue::FixedBytes(value, size) => format!("0x{}", hex::encode(&value[..*size])),
-        DynSolValue::Address(value) => value.to_string(),
-        DynSolValue::Function(value) => format!("0x{}", hex::encode(value)),
-        DynSolValue::Bytes(value) => format!("hex\"{}\"", hex::encode(value)),
-        DynSolValue::String(value) => format!("{value:?}"),
-        DynSolValue::Array(values) | DynSolValue::FixedArray(values) => {
-            format!(
-                "[{}]",
-                values
-                    .iter()
-                    .map(format_value)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-        DynSolValue::Tuple(values) => {
-            format!(
-                "({})",
-                values
-                    .iter()
-                    .map(format_value)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
     }
 }

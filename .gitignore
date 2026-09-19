@@ -1,4 +1,11 @@
 /target
-/.hegel
+
+# Example databases. The default path is <root>/.hegel/examples, so this has to
+# match at any depth rather than only at the repository root.
+.hegel/
+
+# Foundry build output.
 /contracts/out
 /contracts/cache
+/fixtures/out
+/fixtures/cache

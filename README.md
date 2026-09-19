@@ -1,81 +1,38 @@
 # hegel-sol
 
-Property-based and stateful testing for Solidity, built on
-[Hegel](https://hegel.dev) and [revm](https://github.com/bluealloy/revm).
+Property-based and stateful Solidity testing with [Hegel](https://hegel.dev) and
+[revm](https://github.com/bluealloy/revm). It is a standalone Foundry-compatible runner
+with shrinking, replay blobs, persistent examples, parallel execution, and Solidity
+source-mapped failures.
 
-The standalone runner supports Solidity-side draws, ABI auto-draw for unchanged fuzz
-tests, shrinking and replay blobs, persistent example databases, rule/invariant state
-machines, variable pools, targeting and events, JSON reports, custom errors,
-`console.log`, and a focused Foundry cheatcode compatibility layer.
+## Quick start
 
-## Demo
-
-Run the deterministic three-part demonstration:
+Requires Rust and [Foundry](https://book.getfoundry.sh/getting-started/installation).
+From this repository:
 
 ```sh
-./scripts/demo.sh
+cargo build --release --locked
+./target/release/hegel-sol test --root contracts
 ```
 
-It shows stateless shrinking, stateful sequence shrinking, and decoded Solidity
-diagnostics. See [DEMO.md](DEMO.md) for the narrated walkthrough.
+Run the deterministic feature demo with `./scripts/demo.sh`. Use `hegel-sol test --help`
+for every option.
 
-## Try it
+The runner discovers `test*` functions, runs `setUp()` before each generated case, and
+auto-generates ABI arguments for ordinary Forge fuzz tests. Discovery prefixes are
+configurable with `--test-prefix`, `--rule-prefix`, and `--invariant-prefix`. Its default
+example database is `<root>/.hegel/examples`; disable it with `--database off`. A
+reproduce blob belongs to one test, so replaying one requires a selection of exactly one.
+Replay a failure with the printed command or:
 
 ```sh
-cargo run -p hegel-sol -- test \
-  --root contracts \
-  --match-test transfer \
-  --seed 1 \
-  --test-cases 50 \
-  --database off
+HEGEL_SOL_REPRODUCE='<blob>' hegel-sol test --root contracts
 ```
 
-The deliberately buggy token shrinks to `from = address(0)`, `to = address(1)`, and
-`amount = 3`. Replay a printed blob with:
+## Solidity tests
 
-```sh
-HEGEL_SOL_REPRODUCE='<blob>' cargo run -p hegel-sol -- test --root contracts
-```
-
-Use `--help` for contract/test filters, profiles, phases, database selection, stateful
-step count, statistics, JSON, verbosity, and scaling controls.
-
-## Scaling a private test suite
-
-Run independent tests concurrently, split them deterministically across CI workers, and
-raise or lower generated collection sizes:
-
-```sh
-# Local parallelism; reports remain in deterministic discovery order.
-hegel-sol test --root contracts --jobs 8
-
-# Two CI workers running stable, disjoint subsets.
-hegel-sol test --root contracts --shard 1/2
-hegel-sol test --root contracts --shard 2/2
-
-# Explore larger dynamic values when the contract needs them.
-hegel-sol test --root contracts --max-array-len 32 --max-byte-len 256
-
-# Inspect discovery or shard placement without running tests.
-hegel-sol test --root contracts --shard 1/2 --list
-
-# Stop scheduling after a failure and show per-test durations.
-hegel-sol test --root contracts --jobs 8 --fail-fast --show-timings
-```
-
-Sharding happens per discovered stateless test or stateful contract. Artifact discovery
-uses Foundry's current compilation cache, so contracts left behind in `out/` after a
-rename or deletion are not accidentally executed.
-
-Selected contracts are deployed once and their clean post-deployment snapshots are
-shared across independent test jobs. `--fail-fast` prevents new work from being
-scheduled after a failure; tests already running in other workers are allowed to finish.
-JSON reports include `duration_ms`, while text output always ends with a wall-clock
-status summary.
-
-## Solidity API
-
-Inherit `HegelTest`, then draw through `hegel`:
+Copy or import [`contracts/src/Hegel.sol`](contracts/src/Hegel.sol) when tests need
+explicit draws:
 
 ```solidity
 import {HegelTest} from "../src/Hegel.sol";
@@ -83,25 +40,31 @@ import {HegelTest} from "../src/Hegel.sol";
 contract TokenTest is HegelTest {
     function test_transfer() public {
         address from = hegel.drawAddress("from");
-        address to = hegel.drawAddress(); // unnamed draws become draw_0, draw_1, ...
-        hegel.assume(from != to);
+        address to = hegel.drawAddress("to");
         uint256 amount = hegel.drawUint256("amount", 0, 100);
-        // exercise the system and assert a property
+        hegel.assume(from != to);
+        // Exercise the system and assert a property.
     }
 }
 ```
 
-Solidity reserves names such as `uint256`, `address`, and `event`, so the API uses
-`drawUint256`, `drawAddress`, and `recordEvent`.
+The API also provides signed, boolean, bytes, string, pool, target, event, note, and span
+operations; its NatSpec is the complete reference. ABI auto-draw supports scalars, bytes,
+strings, arrays, tuples, and structs.
 
-## Stateful tests
+`Hegel.sol` declares `HEGEL_PROTOCOL_VERSION` and exposes it through
+`hegelProtocolVersion()`. The runner checks it before executing anything, so a copy that
+has fallen behind is named rather than failing later as an unknown selector.
 
-Functions prefixed with `rule_` are handlers; functions prefixed with `invariant_` are
-checked initially, at sampled join points, and finally. `stepCount()` can override the
-CLI's default state-machine length.
+For stateful tests, name handlers `rule_*` and properties `invariant_*`. Invariants run
+initially, at sampled join points, and finally. Optional `stepCount()` overrides the CLI
+default. Handlers are called from several accounts (`--actors`, default 3) so invariants
+needing two parties are reachable; the reported counterexample names the sender of each
+call. A reverting handler fails the test unless `--allow-rule-reverts` is set, which
+matches Foundry's default invariant behaviour and suits suites ported from it.
 
 ```solidity
-contract CounterTest is HegelTest {
+contract CounterTest {
     uint256 value;
 
     function rule_add(uint8 amount) public { value += amount; }
@@ -110,28 +73,43 @@ contract CounterTest is HegelTest {
 }
 ```
 
-`poolNew`, `poolAdd`, and `poolPick` let handlers shrink references to values created by
-earlier rules. The runner reports the minimized rule sequence and auto-drawn arguments.
+## Useful commands
+
+```sh
+hegel-sol test --root contracts --jobs 8 --fail-fast --show-timings
+hegel-sol test --root contracts --shard 1/2
+hegel-sol test --root contracts --max-array-len 32 --max-byte-len 256
+hegel-sol test --root contracts --actors 5 --allow-rule-reverts
+hegel-sol test --root contracts --list
+hegel-sol test --root contracts --json
+```
+
+Generation is guided by the basic blocks each example reaches, reported to the engine as
+a target score. Turn it off with `--no-coverage-target`.
+
+Reports stay in deterministic discovery order. Shards are stable and disjoint. Selected
+contracts are deployed once, while each generated case receives isolated state. Profiles
+come from `hegel.toml` via `--profile`.
+
+JSON output is versioned and documented in [REPORTING.md](REPORTING.md).
 
 ## Foundry compatibility
 
-The magic `vm` address supports `prank`, `startPrank`, `stopPrank`, `deal`, `warp`,
-`roll`, `expectRevert`, `label`, and `assume`. This is enough for small
-OpenZeppelin-style tests that use those cheatcodes. Calls to Foundry's standard console
-address are captured, and ABI custom errors are decoded in failures.
+Supported `vm` calls: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`,
+`expectRevert`, `label`, and `assume`. Common `console.log` calls and ABI custom errors
+are decoded. Forked-state cheatcodes are not supported; this project intentionally remains
+a standalone runner instead of a Foundry fork.
 
-This project deliberately remains a standalone runner instead of maintaining a Foundry
-fork. A future native `forge test --fuzzer hegel` integration would require ongoing
-coupling to Foundry's internal fuzz and invariant executors.
+## Development
 
-## Layout
+```sh
+./scripts/ci.sh          # format, lint, build, and test
+./scripts/benchmark.sh   # release-mode scaling workloads
+```
 
-- `crates/hegel-sol`: safe Hegel FFI wrappers, artifact loader, revm harness,
-  magic-address inspector, stateful/stateless run loops, reports, and CLI.
-- `contracts/src/Hegel.sol`: draws, pools, and supported VM cheatcode interfaces.
-- `contracts/test`: shrinking, auto-draw, stateful, pool, and compatibility examples.
-- `DESIGN.md`, `PLAN.md`, and `NOTES.md`: architecture, status, and implementation notes.
+`contracts/` is the showcase project. `fixtures/` holds contracts that exercise how the
+runner reacts to broken projects; several abort a run by design, so they are kept
+separate.
 
-Phases 0–3 and the first private-suite scaling milestone are implemented. Broader
-ecosystem/community work is intentionally deferred while this remains an individual
-project.
+Architecture and status: [DESIGN.md](DESIGN.md), [PLAN.md](PLAN.md), and
+[NOTES.md](NOTES.md).

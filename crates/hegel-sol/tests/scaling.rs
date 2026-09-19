@@ -1,139 +1,123 @@
-use std::{collections::BTreeSet, path::PathBuf};
+mod support;
 
-use hegel_sol::runner::{Options, Shard, TestStatus, list_project, run_project};
+use std::collections::BTreeSet;
 
-fn options(contract: &str) -> Options {
-    Options {
-        root: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts"),
-        match_contract: Some(contract.into()),
-        match_test: None,
-        test_cases: 10,
-        seed: Some(11),
-        database: Some(String::new()),
-        profile: None,
-        reproduce: None,
-        phases: 31,
-        verbosity: 1,
-        step_count: 10,
-        show_statistics: false,
-        jobs: 1,
-        shard: None,
-        max_array_len: 8,
-        max_byte_len: 64,
-        fail_fast: false,
-    }
-}
+use hegel_sol::runner::{Options, Shard, list_project, run_project};
+use support::{contracts, options, statuses};
 
-fn names(reports: &[hegel_sol::runner::TestReport]) -> BTreeSet<String> {
-    reports.iter().map(|report| report.test.clone()).collect()
-}
-
+/// Sharding is a discovery-time decision, so it is observable without running
+/// anything. Listing also has to agree with what a real run would select.
 #[test]
-fn list_mode_reports_selected_tests_without_execution() {
-    let tests = list_project(&options("ScalingTest")).unwrap();
-    assert_eq!(
-        tests,
-        [
-            "ScalingTest.testFuzz_configured_limits",
-            "ScalingTest.test_parallel_a",
-            "ScalingTest.test_parallel_b",
-            "ScalingTest.test_parallel_c",
-        ]
+fn shards_partition_the_same_tests_a_run_would_select() {
+    let base = options(contracts(), "ScalingTest");
+    let all: BTreeSet<String> = list_project(&base).unwrap().into_iter().collect();
+
+    let shards: Vec<BTreeSet<String>> = (1..=2)
+        .map(|number| {
+            list_project(&Options {
+                shard: Some(Shard::new(number, 2).unwrap()),
+                ..base.clone()
+            })
+            .unwrap()
+            .into_iter()
+            .collect()
+        })
+        .collect();
+
+    assert!(
+        shards[0].is_disjoint(&shards[1]),
+        "a test must run in exactly one shard"
     );
+    assert_eq!(
+        &shards[0] | &shards[1],
+        all,
+        "the shards together must leave nothing unrun"
+    );
+
+    let executed: BTreeSet<String> = run_project(&base)
+        .unwrap()
+        .reports
+        .into_iter()
+        .map(|report| report.test)
+        .collect();
+    assert_eq!(executed, all, "listing must agree with execution");
 }
 
+/// The report is the runner's output, and it has to read the same whether the
+/// work was done on one thread or several.
 #[test]
-fn configured_generation_limits_are_enforced() {
-    let reports = run_project(&Options {
-        match_test: Some("configured_limits".into()),
+fn parallel_execution_reports_the_same_results_in_the_same_order() {
+    let sequential = run_project(&options(contracts(), "ScalingTest")).unwrap();
+    let parallel = run_project(&Options {
+        jobs: 3,
+        ..options(contracts(), "ScalingTest")
+    })
+    .unwrap();
+
+    assert_eq!(statuses(&sequential), statuses(&parallel));
+    assert!(!sequential.failed());
+}
+
+/// Dynamic arguments are generated within bounds the run configures; the
+/// contract asserts the same bounds from the inside.
+#[test]
+fn generation_stays_within_the_configured_limits() {
+    let execution = run_project(&Options {
+        test_cases: 50,
         max_array_len: 2,
         max_byte_len: 4,
-        ..options("ScalingTest")
+        ..options(contracts(), "GenerationLimitsTest")
     })
     .unwrap();
 
-    assert_eq!(reports.len(), 1);
-    assert!(matches!(reports[0].status, TestStatus::Passed));
-}
-
-#[test]
-fn parallel_execution_preserves_results_and_order() {
-    let mut sequential_options = options("ScalingTest");
-    sequential_options.max_array_len = 2;
-    sequential_options.max_byte_len = 4;
-    let mut parallel_options = sequential_options.clone();
-    parallel_options.jobs = 3;
-
-    let sequential = run_project(&sequential_options).unwrap();
-    let parallel = run_project(&parallel_options).unwrap();
-
     assert_eq!(
-        sequential
-            .iter()
-            .map(|report| &report.test)
-            .collect::<Vec<_>>(),
-        parallel
-            .iter()
-            .map(|report| &report.test)
-            .collect::<Vec<_>>()
-    );
-    assert!(
-        parallel
-            .iter()
-            .all(|report| matches!(report.status, TestStatus::Passed))
+        statuses(&execution),
+        [("GenerationLimitsTest.testFuzz_configured_limits", "passed")]
     );
 }
 
+/// Fail-fast has to stop the run, not merely mark it failed, or a long suite
+/// keeps burning time after the answer is already known.
 #[test]
-fn fail_fast_stops_before_the_next_sequential_test() {
-    let selected = list_project(&options("FailFastTest")).unwrap();
-    assert_eq!(selected.len(), 3);
+fn fail_fast_stops_before_running_the_tests_after_the_failure() {
+    let base = options(contracts(), "FailFastTest");
+    assert_eq!(
+        list_project(&base).unwrap().len(),
+        3,
+        "the fixture must have tests left to skip"
+    );
 
-    let reports = run_project(&Options {
+    let execution = run_project(&Options {
         test_cases: 1,
         fail_fast: true,
-        ..options("FailFastTest")
+        ..base
     })
     .unwrap();
 
-    assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].test, "FailFastTest.test_00_fails");
-    assert!(matches!(reports[0].status, TestStatus::Failed));
-}
-
-#[test]
-fn deterministic_shards_partition_the_selected_tests() {
-    let all = run_project(&options("ScalingTest")).unwrap();
-    let first = run_project(&Options {
-        shard: Some(Shard::new(1, 2).unwrap()),
-        ..options("ScalingTest")
-    })
-    .unwrap();
-    let second = run_project(&Options {
-        shard: Some(Shard::new(2, 2).unwrap()),
-        ..options("ScalingTest")
-    })
-    .unwrap();
-
-    assert!(names(&first).is_disjoint(&names(&second)));
     assert_eq!(
-        names(&all),
-        names(&first).union(&names(&second)).cloned().collect()
+        statuses(&execution),
+        [("FailFastTest.test_00_fails", "failed")]
     );
 }
 
+/// `stepCount()` is contract-supplied and need not be a view, so probing it must
+/// not leave state behind for the tests that follow.
 #[test]
-fn step_count_probe_does_not_mutate_shared_snapshot() {
-    let reports = run_project(&Options {
+fn probing_step_count_does_not_mutate_the_shared_snapshot() {
+    let execution = run_project(&Options {
         test_cases: 1,
-        ..options("StepCountIsolationTest")
+        ..options(contracts(), "StepCountIsolationTest")
     })
     .unwrap();
 
-    assert_eq!(reports.len(), 2);
-    assert!(
-        reports
-            .iter()
-            .all(|report| matches!(report.status, TestStatus::Passed))
+    assert_eq!(
+        statuses(&execution),
+        [
+            (
+                "StepCountIsolationTest.test_probe_does_not_mutate_base",
+                "passed"
+            ),
+            ("StepCountIsolationTest.stateful", "passed"),
+        ]
     );
 }

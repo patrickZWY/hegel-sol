@@ -28,10 +28,13 @@ contract StatefulCounterTest is HegelTest {
     }
 }
 
+/// @notice Pools let a handler reuse a value an earlier handler created, instead
+/// of drawing a fresh one that no state refers to.
 contract PoolStatefulTest is HegelTest {
     uint256 private pool;
-    uint256 public additions;
-    bytes32 public lastPicked;
+    mapping(bytes32 => bool) private remembered;
+    bytes32 private lastPicked;
+    bool private picked;
 
     function setUp() public {
         pool = hegel.poolNew("values");
@@ -39,15 +42,21 @@ contract PoolStatefulTest is HegelTest {
 
     function rule_remember(bytes32 value) public {
         hegel.poolAdd(pool, value);
-        additions++;
+        remembered[value] = true;
     }
 
     function rule_pick() public {
         lastPicked = hegel.poolPick(pool, false);
+        picked = true;
     }
 
-    function invariant_pool_is_initialized() public view {
-        assert(pool == 0);
+    /// @notice A pick only ever returns a value some earlier call added.
+    /// @dev The engine picks by variable id and the runner holds the values, so
+    /// a mismatch between the two would surface here as a value this contract
+    /// never saw. Picking from an empty pool rejects the step instead, which is
+    /// why `picked` can still be false.
+    function invariant_picks_come_from_the_pool() public view {
+        assert(!picked || remembered[lastPicked]);
     }
 }
 

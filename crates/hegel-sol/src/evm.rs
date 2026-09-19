@@ -21,19 +21,28 @@ pub struct Harness {
 }
 
 impl Harness {
-    pub fn new() -> Self {
+    /// Build an empty chain that can run test contracts.
+    ///
+    /// `actors` are the additional accounts handler calls may originate from;
+    /// each is funded so a call from one is never rejected for lack of balance.
+    pub fn new(actors: &[Address]) -> Self {
         let mut db = Database::default();
-        db.insert_account_info(
-            DEFAULT_CALLER,
-            AccountInfo {
-                balance: U256::MAX,
-                ..Default::default()
-            },
-        );
+        for caller in std::iter::once(&DEFAULT_CALLER).chain(actors) {
+            db.insert_account_info(
+                *caller,
+                AccountInfo {
+                    balance: U256::MAX,
+                    ..Default::default()
+                },
+            );
+        }
+        // Solidity checks that a call target has code before some external
+        // calls, so the intercepted addresses need a non-empty account. The
+        // inspector short-circuits every call to them, so this STOP never runs.
         for address in [
-            crate::inspector::hegel_address(),
-            crate::inspector::hevm_address(),
-            crate::inspector::console_address(),
+            crate::protocol::hegel_address(),
+            crate::protocol::hevm_address(),
+            crate::protocol::console_address(),
         ] {
             db.insert_account_info(
                 address,
@@ -70,12 +79,6 @@ impl Harness {
 
     pub fn call(&mut self, to: Address, calldata: Bytes) -> Result<ExecutionResult> {
         execute(&mut self.db, self.caller, self.gas_limit, to, calldata)
-    }
-}
-
-impl Default for Harness {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -118,7 +121,7 @@ mod tests {
         let init = Bytes::from_static(&[
             0x64, 0x60, 0x00, 0x60, 0x00, 0xf3, 0x60, 0x00, 0x52, 0x60, 0x05, 0x60, 0x1b, 0xf3,
         ]);
-        let mut harness = Harness::new();
+        let mut harness = Harness::new(&[]);
         let address = harness.deploy(init).unwrap();
         assert!(harness.call(address, Bytes::new()).unwrap().is_success());
     }

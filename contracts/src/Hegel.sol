@@ -4,6 +4,13 @@ pragma solidity ^0.8.20;
 address constant HEGEL = address(uint160(uint256(keccak256("hegel.sol"))));
 address constant HEVM = address(uint160(uint256(keccak256("hevm cheat code"))));
 
+// Version of the runner protocol this file implements. Projects keep their own
+// copy of this file, so it can drift from the runner driving it. `HegelTest`
+// reports this value through `hegelProtocolVersion()`, and the runner refuses to
+// run a contract whose version it does not speak. Bump it whenever a selector or
+// the meaning behind one changes.
+uint256 constant HEGEL_PROTOCOL_VERSION = 1;
+
 interface IHegel {
     /// @notice Draw an auto-named unsigned integer in the inclusive range [lo, hi].
     function drawUint256(uint256 lo, uint256 hi) external returns (uint256);
@@ -55,6 +62,10 @@ interface IHegel {
     /// @notice Guide generation toward examples with larger scores.
     function target(int256 score) external;
 
+    /// @notice Guide generation using a named score. Scores recorded under
+    /// different labels are maximised independently.
+    function target(string calldata label, int256 score) external;
+
     /// @notice Record a label for end-of-run statistics.
     function recordEvent(string calldata label) external;
 
@@ -95,4 +106,11 @@ interface IHegelVm {
 abstract contract HegelTest {
     IHegel internal constant hegel = IHegel(HEGEL);
     IHegelVm internal constant vm = IHegelVm(HEVM);
+
+    /// @notice Protocol version this test was compiled against.
+    /// @dev The runner calls this before executing anything so a mismatched copy
+    /// of Hegel.sol is reported by name instead of as an unknown selector.
+    function hegelProtocolVersion() public pure returns (uint256) {
+        return HEGEL_PROTOCOL_VERSION;
+    }
 }
