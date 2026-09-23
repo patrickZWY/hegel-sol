@@ -1,0 +1,9 @@
+# Showcase project: the contracts the README, the demo, and new users are meant to
+# read. Every test here runs end to end, and the integration tests assert that the
+# failures it demonstrates shrink to the counterexamples the README promises.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"
+remappings = ["hegel-sol/=../solidity/src/"]

@@ -1,0 +1,6 @@
+[alias]
+x = "run --package xtask --"
+
+[env]
+# Absolute path of the workspace root, so xtask can run from any directory.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }

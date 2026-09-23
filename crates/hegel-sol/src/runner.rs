@@ -61,7 +61,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            root: PathBuf::from("contracts"),
+            root: PathBuf::from("."),
             match_contract: None,
             match_test: None,
             test_cases: 100,
@@ -405,7 +405,7 @@ fn check_protocol_version(contract: &Contract, harness: &Harness, address: Addre
     if version != U256::from(protocol::PROTOCOL_VERSION) {
         bail!(
             "{} was compiled against Hegel.sol protocol version {version}, but this runner \
-             speaks version {}. Update contracts/src/Hegel.sol in the project to match.",
+             speaks version {}. Update the project's copy of Hegel.sol to match.",
             contract.name,
             protocol::PROTOCOL_VERSION
         );

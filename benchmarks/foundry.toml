@@ -1,0 +1,7 @@
+# Workloads driven by `cargo x bench`. They are not tests: each only asserts what
+# a runner that replayed or duplicated a step would break.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"

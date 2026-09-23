@@ -127,7 +127,7 @@ impl SourceResolver for SolcSourceMap {
 }
 
 /// Apply one source-map field, treating an empty field as "inherit". Returns
-/// false when the field is present but unparseable, which ends decoding.
+/// false when the field is present but unparsable, which ends decoding.
 fn inherit_field<T: std::str::FromStr>(current: &mut T, field: Option<&str>) -> bool {
     let Some(value) = field.filter(|value| !value.is_empty()) else {
         return true;
@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_entry_truncates_the_map_instead_of_failing() {
+    fn an_unparsable_entry_truncates_the_map_instead_of_failing() {
         // A future solc could add fields or change the encoding; partial
         // coverage is the intended degradation, not an error.
         let map = SolcSourceMap::parse("0x000000", "0:1:0;not-a-number:1:0;4:1:0", index("abcd"));

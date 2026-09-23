@@ -12,11 +12,12 @@ From this repository:
 
 ```sh
 cargo build --release --locked
-./target/release/hegel-sol test --root contracts
+./target/release/hegel-sol test --root examples
 ```
 
-Run the deterministic feature demo with `./scripts/demo.sh`. Use `hegel-sol test --help`
-for every option.
+`--root` names a Foundry project and defaults to the current directory. Run the
+deterministic feature demo with `cargo x demo`. Use `hegel-sol test --help` for every
+option.
 
 The runner discovers `test*` functions, runs `setUp()` before each generated case, and
 auto-generates ABI arguments for ordinary Forge fuzz tests. Discovery prefixes are
@@ -26,16 +27,22 @@ reproduce blob belongs to one test, so replaying one requires a selection of exa
 Replay a failure with the printed command or:
 
 ```sh
-HEGEL_SOL_REPRODUCE='<blob>' hegel-sol test --root contracts
+HEGEL_SOL_REPRODUCE='<blob>' hegel-sol test --root examples
 ```
 
 ## Solidity tests
 
-Copy or import [`contracts/src/Hegel.sol`](contracts/src/Hegel.sol) when tests need
-explicit draws:
+Tests import [`solidity/src/Hegel.sol`](solidity/src/Hegel.sol) when they need explicit
+draws. Copy the file into your project, or install this repository as a Foundry
+dependency and remap it:
+
+```toml
+# foundry.toml
+remappings = ["hegel-sol/=lib/hegel-sol/solidity/src/"]
+```
 
 ```solidity
-import {HegelTest} from "../src/Hegel.sol";
+import {HegelTest} from "hegel-sol/Hegel.sol";
 
 contract TokenTest is HegelTest {
     function test_transfer() public {
@@ -73,15 +80,17 @@ contract CounterTest {
 }
 ```
 
+The [`examples/`](examples) project shows each of these in a complete, runnable test.
+
 ## Useful commands
 
 ```sh
-hegel-sol test --root contracts --jobs 8 --fail-fast --show-timings
-hegel-sol test --root contracts --shard 1/2
-hegel-sol test --root contracts --max-array-len 32 --max-byte-len 256
-hegel-sol test --root contracts --actors 5 --allow-rule-reverts
-hegel-sol test --root contracts --list
-hegel-sol test --root contracts --json
+hegel-sol test --root examples --jobs 8 --fail-fast --show-timings
+hegel-sol test --root examples --shard 1/2
+hegel-sol test --root examples --max-array-len 32 --max-byte-len 256
+hegel-sol test --root examples --actors 5 --allow-rule-reverts
+hegel-sol test --root examples --list
+hegel-sol test --root examples --json
 ```
 
 Generation is guided by the basic blocks each example reaches, reported to the engine as
@@ -91,7 +100,7 @@ Reports stay in deterministic discovery order. Shards are stable and disjoint. S
 contracts are deployed once, while each generated case receives isolated state. Profiles
 come from `hegel.toml` via `--profile`.
 
-JSON output is versioned and documented in [REPORTING.md](REPORTING.md).
+JSON output is versioned and documented in [docs/reporting.md](docs/reporting.md).
 
 ## Foundry compatibility
 
@@ -100,16 +109,33 @@ Supported `vm` calls: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`
 are decoded. Forked-state cheatcodes are not supported; this project intentionally remains
 a standalone runner instead of a Foundry fork.
 
+## Repository layout
+
+| Path                        | Holds                                                          |
+| --------------------------- | -------------------------------------------------------------- |
+| `crates/hegel-sol`          | The runner: engine FFI, EVM host, Foundry and solc adapters, CLI. |
+| `solidity/`                 | `Hegel.sol`, the interface and base contract test projects import. |
+| `examples/`                 | The showcase Foundry project this README and the demo point at. |
+| `benchmarks/`               | Workloads for `cargo x bench`.                                 |
+| `crates/tests-integration/` | Integration tests and the Foundry projects they run against.   |
+| `crates/xtask/`             | The `cargo x` workflows.                                       |
+| `docs/`                     | Reference material such as the JSON report schema.             |
+
 ## Development
 
 ```sh
-./scripts/ci.sh          # format, lint, build, and test
-./scripts/benchmark.sh   # release-mode scaling workloads
+cargo x lint            # rustfmt, clippy, forge fmt, typos
+cargo x build --locked  # every crate and every Foundry project
+cargo x test            # unit and integration tests
+cargo x demo            # three intentional failures, found and shrunk
+cargo x bench           # release-mode scaling workloads
 ```
 
-`contracts/` is the showcase project. `fixtures/` holds contracts that exercise how the
-runner reacts to broken projects; several abort a run by design, so they are kept
-separate.
+CI runs the first three on every push and pull request; `cargo x lint --fix` applies
+formatting and lint fixes. Enable the committed pre-push hook, which runs the same
+checks, with `git config core.hooksPath .githooks`. Pushing a `vX.Y.Z` tag runs the
+checks again, builds a Linux binary, and publishes it with a checksum as a GitHub
+release.
 
-Architecture and status: [DESIGN.md](DESIGN.md), [PLAN.md](PLAN.md), and
-[NOTES.md](NOTES.md).
+Conventions for contributors and coding agents: [AGENTS.md](AGENTS.md). Architecture
+and decisions: [DESIGN.md](DESIGN.md). User-visible changes: [CHANGELOG.md](CHANGELOG.md).

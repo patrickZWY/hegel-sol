@@ -1,0 +1,8 @@
+# Contracts that exist to pin one runner behaviour each: scheduling, generation
+# limits, fail-fast, snapshot isolation, handler reverts, and trace contents.
+# They run to completion, so the whole project can be executed end to end.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"

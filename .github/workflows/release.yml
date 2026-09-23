@@ -15,23 +15,26 @@ env:
 jobs:
   release:
     name: Verify and release Linux binary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup
         with:
-          components: rustfmt, clippy
-      - uses: foundry-rs/foundry-toolchain@v1.9.1
+          components: rustfmt,clippy
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
-          version: v1.3.6
+          tool: typos-cli
       - name: Verify source and tests
-        run: ./scripts/ci.sh
+        run: |
+          cargo x lint
+          cargo x build --locked
+          cargo x test
       - name: Build release binary
         run: cargo build --release --locked -p hegel-sol
       - name: Package binary and checksum
-        shell: bash
         run: |
           mkdir -p dist
           cp target/release/hegel-sol dist/hegel-sol-linux-x86_64

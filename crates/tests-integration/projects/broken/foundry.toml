@@ -1,0 +1,7 @@
+# Projects the runner must refuse. Each contract here aborts a run by design, which
+# is why they are kept apart from `behaviour/` rather than mixed into it.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"

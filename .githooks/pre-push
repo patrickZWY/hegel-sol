@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
+# The same three commands CI runs. Enable with: git config core.hooksPath .githooks
 set -euo pipefail
 
-echo "Running required hegel-sol checks before push..."
-exec ./scripts/ci.sh
+echo "Running the required hegel-sol checks before push..."
+cargo x lint
+cargo x build --locked
+cargo x test

@@ -1,21 +1,23 @@
 [package]
 name = "hegel-sol"
-version = "0.1.0"
-edition = "2024"
 description = "Property-based testing for Solidity, built on Hegel (Hypothesis)"
-license = "MIT"
-
-[[bin]]
-name = "hegel-sol"
-path = "src/main.rs"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-hegeltest-c = "=0.42.3"
-revm = { version = "43", default-features = false, features = ["std"] }
-alloy-json-abi = "1.7"
-alloy-dyn-abi = "1.7"
-alloy-primitives = "1.7"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
+hegeltest-c = { workspace = true }
+revm = { workspace = true }
+alloy-json-abi = { workspace = true }
+alloy-dyn-abi = { workspace = true }
+alloy-primitives = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

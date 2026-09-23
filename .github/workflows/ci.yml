@@ -10,8 +10,9 @@ on:
 permissions:
   contents: read
 
+# One run per pull request, or per push when not on a pull request.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -19,40 +20,48 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  rust-quality:
-    name: Rust quality
-    runs-on: ubuntu-latest
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
         with:
-          components: rustfmt, clippy
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+          components: rustfmt,clippy
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
+        with:
+          tool: typos-cli
+      - run: cargo x lint
 
-  solidity:
-    name: Solidity quality and build
-    runs-on: ubuntu-latest
+  test:
+    name: Test (Rust ${{ matrix.rust }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # The first entry is the MSRV declared as rust-version in Cargo.toml.
+        rust: ["1.94.1", stable]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: foundry-rs/foundry-toolchain@v1.9.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
         with:
-          version: v1.3.6
-      - name: Check formatting
-        run: forge fmt --root contracts --check && forge fmt --root fixtures --check
-      - name: Build contracts
-        run: forge build --root contracts && forge build --root fixtures
+          rust: ${{ matrix.rust }}
+      - run: cargo x build --locked
+      - run: cargo x test
 
-  tests:
-    name: Tests
-    runs-on: ubuntu-latest
+  # Branch protection requires this one job, so adding or renaming the jobs
+  # above never needs a settings change.
+  required:
+    name: Required
+    runs-on: ubuntu-24.04
+    if: ${{ always() }}
+    needs: [lint, test]
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: foundry-rs/foundry-toolchain@v1.9.1
-        with:
-          version: v1.3.6
-      - name: Run unit and integration tests
-        run: cargo test --workspace --locked
+      - name: Check that every required job succeeded
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" || "${{ needs.test.result }}" != "success" ]]; then
+            echo "Required jobs have not all succeeded."
+            exit 1
+          fi

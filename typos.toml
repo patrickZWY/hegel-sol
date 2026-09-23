@@ -1,0 +1,4 @@
+[files]
+extend-exclude = ["Cargo.lock", "**/out/", "**/cache/", "/target"]
+
+[default.extend-words]

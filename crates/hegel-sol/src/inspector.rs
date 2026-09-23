@@ -525,7 +525,7 @@ fn split_selector(data: &[u8]) -> Option<(&[u8], &[u8])> {
 
 fn unknown_selector(selector: &[u8]) -> Abort {
     Abort::Error(format!(
-        "unknown Hegel selector 0x{}; this usually means contracts/src/Hegel.sol is from a \
+        "unknown Hegel selector 0x{}; this usually means the project's Hegel.sol is from a \
          different release than the runner (expected protocol version {})",
         alloy_primitives::hex::encode(selector),
         protocol::PROTOCOL_VERSION

@@ -1,0 +1,7 @@
+# The Solidity half of hegel-sol: the `Hegel.sol` interface and base contract that
+# test projects import. It has no tests of its own; `examples/` shows it in use.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"

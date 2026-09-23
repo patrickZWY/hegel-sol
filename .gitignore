@@ -4,8 +4,12 @@
 # match at any depth rather than only at the repository root.
 .hegel/
 
-# Foundry build output.
-/contracts/out
-/contracts/cache
-/fixtures/out
-/fixtures/cache
+# Foundry build output, one pair per Foundry project.
+/solidity/out
+/solidity/cache
+/examples/out
+/examples/cache
+/benchmarks/out
+/benchmarks/cache
+/crates/tests-integration/projects/*/out
+/crates/tests-integration/projects/*/cache

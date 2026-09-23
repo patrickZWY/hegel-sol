@@ -1,8 +1,0 @@
-# Contracts exercising how the runner reacts to broken or unusual test projects.
-# They are kept out of `contracts/` because several abort a run by design, which
-# would stop the showcase suite from being runnable end to end.
-[profile.default]
-src = "src"
-test = "test"
-out = "out"
-solc_version = "0.8.30"

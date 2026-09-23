@@ -17,7 +17,7 @@ use std::{collections::HashMap, sync::LazyLock};
 use alloy_dyn_abi::{DynSolType, DynSolValue};
 use alloy_primitives::{Address, keccak256};
 
-/// Wire-format version of the Solidity surface in `contracts/src/Hegel.sol`.
+/// Wire-format version of the Solidity surface in `solidity/src/Hegel.sol`.
 ///
 /// Test projects copy or import that file, so the runner and the contract it is
 /// driving are versioned independently and can drift. Bump this on any change to

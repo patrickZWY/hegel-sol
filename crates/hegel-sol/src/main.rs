@@ -50,7 +50,8 @@ enum Command {
 
 #[derive(clap::Args)]
 struct TestArgs {
-    #[arg(long, default_value = "contracts")]
+    /// Foundry project to test.
+    #[arg(long, default_value = ".")]
     root: PathBuf,
     #[arg(long)]
     match_contract: Option<String>,
@@ -412,8 +413,8 @@ mod tests {
     }
 
     #[test]
-    fn every_field_reporting_md_documents_is_present_under_its_documented_name() {
-        // REPORTING.md promises these names and types to CI consumers for the
+    fn every_field_the_reporting_doc_documents_is_present_under_its_documented_name() {
+        // docs/reporting.md promises these names and types to CI consumers for the
         // life of schema version 1. Renaming one must fail here rather than in
         // somebody's pipeline.
         let reports = [populated_report()];

@@ -1,0 +1,31 @@
+name: Set up toolchains
+description: >-
+  Install the pinned Rust and Foundry toolchains and restore the Cargo cache.
+  The Foundry release is pinned here so every workflow uses the same one.
+
+inputs:
+  rust:
+    description: Rust toolchain to install (a channel or an exact version).
+    default: stable
+  components:
+    description: Comma-separated rustup components to add, such as rustfmt,clippy.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust ${{ inputs.rust }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        components=()
+        IFS=',' read -ra requested <<< "${{ inputs.components }}"
+        for component in "${requested[@]}"; do
+          [[ -n "$component" ]] && components+=(--component "$component")
+        done
+        rustup toolchain install "${{ inputs.rust }}" --profile minimal --no-self-update "${components[@]}"
+        echo "RUSTUP_TOOLCHAIN=${{ inputs.rust }}" >> "$GITHUB_ENV"
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      with:
+        version: v1.7.1

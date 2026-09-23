@@ -1,8 +1,8 @@
-# hegel-sol design notes
+# hegel-sol design
 
-Property-based testing for Solidity, built on Hegel (Hypothesis). This document records
-the research snapshot from 2026-09-15; the standalone runner described below is now
-implemented.
+How the runner is built and why. The API facts below were gathered on 2026-09-15 against
+the versions named and are what the code relies on; the decision log at the end records
+what was decided since, with dates, so a later reader can tell a constraint from a habit.
 
 ## Core constraint
 
@@ -10,6 +10,43 @@ Solidity runs inside the EVM and cannot link libhegel. The "binding" is therefor
 runner (Rust, revm) that executes Solidity test contracts and translates draws into
 libhegel calls. Every other Hegel library (Rust, Go, TS, Java, OCaml, C++) is a thin
 frontend over the same C ABI, so this is the same shape, with the EVM as the "language".
+
+## Layering
+
+The crate is layered so that each volatile dependency is known in one place:
+
+1. `engine`: safe wrappers over the libhegel C ABI. Knows nothing about the EVM.
+2. `evm`, `inspector`, `protocol`: an EVM host. Intercepts calls to the Hegel and
+   Foundry cheatcode addresses and knows nothing about Solidity source.
+3. `artifacts`, `sourcemap`: the Foundry and solc adapters. Build a project, read its
+   artifacts, and decode its debug output.
+4. `runner`: discovery, scheduling, replay, and reporting. `main` is the CLI over it.
+
+A frontend for another EVM language would replace only layers 3 and 4.
+
+### Toolchain seams
+
+Solidity the language moves slowly; the toolchain around it does not. The volatile
+inputs are Foundry's internal build cache, solc's artifact and source-map encodings,
+and Foundry's cheatcode surface, none of which carry compatibility guarantees. Three
+boundaries isolate them:
+
+- `artifacts::Project` is where a build tool is known. `FoundryProject` runs `forge
+  build` and reads Foundry's cache; when that cache is missing or unparsable the loader
+  warns and scans the artifact directory instead. Losing the cache costs stale-artifact
+  exclusion, not the ability to run.
+- `sourcemap::SourceResolver` is where solc's debug output is decoded, and it answers
+  with `Option`. A malformed source-map entry truncates the map, an unreadable source
+  file costs that file's line numbers, and `NoSources` covers a project with no debug
+  information at all. A format change costs precision, never a run.
+- `protocol` is the host-call wire format: one table mapping a selector to an operation
+  and its parameter types, decoded by `alloy-dyn-abi`. Selectors are hashed once rather
+  than per comparison per call, and the crate holds no second implementation of the ABI
+  specification. `PROTOCOL_VERSION` is checked against the project's `Hegel.sol` before
+  any test runs.
+
+`discovery::Conventions` holds the name prefixes that decide what a test is, so the
+convention is a value rather than scattered literals.
 
 ## Engine facts (hegel-rust repo, `hegel-c/include/hegel.h`, 2686 lines)
 
@@ -70,63 +107,132 @@ frontend over the same C ABI, so this is the same shape, with the EVM as the "la
   `inspect_tx` without commit so the journal is discarded.
 - Use `revm::primitives` (alloy-primitives 1.7.3) for Address/U256/Bytes to avoid
   version splits with `alloy-json-abi` / `alloy-dyn-abi` 1.7.x.
+- revm 43.0.2 has `disable_nonce_check` but no `disable_balance_check`. The harness
+  funds its caller explicitly.
 
-## Planned Solidity surface
+## Solidity surface
 
-Magic address `HEGEL = address(uint160(uint256(keccak256("hegel.sol"))))`, interface
-`IHegel` with: `uint256(string name, uint256 lo, uint256 hi)`, `int256(...)`, `bool(name)`,
-`address(name)`, `bytes32(name)`, `bytes(name, minLen, maxLen)`, `string(name, maxLen)`,
-`assume(bool)`, `startSpan(string)`, `stopSpan(bool discard)`, `note(string)`,
-`target(int256 score)`, `event(string label)`. A `HegelTest` base contract exposes
-`hegel` as `IHegel(HEGEL)`. Unnamed overloads can come later.
+`solidity/src/Hegel.sol` is the reference: a magic address
+`HEGEL = address(uint160(uint256(keccak256("hegel.sol"))))`, the `IHegel` interface,
+the `IHegelVm` subset of Foundry cheatcodes, and a `HegelTest` base contract exposing
+both. Test discovery follows Foundry's conventions: `test*` functions with draws in the
+body or ABI-typed arguments generated from the signature, optional `setUp()`, and
+`rule_*` handlers plus `invariant_*` checks mapped onto the engine state machine.
 
-Test discovery: functions prefixed `test` (draws in body, or ABI-typed args auto-drawn
-from the function signature), optional `setUp()`. Stateful: `rule_*` handlers plus
-`invariant_*` checks, mapped onto the engine state machine.
+Constraints the language imposed on that surface:
 
-Compile with `forge build` and read `out/<File>.sol/<Contract>.json` (abi + bytecode).
-
-## Phases
-
-0. Spike: runner with one ERC20 property, draws via magic address, confirm shrinking and
-   blob replay.
-1. CLI (`hegel-sol test`), settings flags, ABI auto-draw, struct/array generation.
-2. Stateful machines, pools, spans, targeting.
-3. Foundry integration (forge flag or drop-in shim for unchanged forge-std tests).
-4. hegel-zoo entry (OpenZeppelin, Solady, Uniswap v2) and Antithesis wiring.
-
-## Decoupling seams (2026-09-19)
-
-Solidity the language moves slowly; the toolchain around it does not. The volatile
-inputs are Foundry's internal build cache, solc's artifact and source-map encodings,
-and Foundry's cheatcode surface — none of which carry compatibility guarantees. Three
-boundaries isolate them:
-
-- `artifacts::Project` is where a build tool is known. `FoundryProject` runs `forge
-  build` and reads Foundry's cache; when that cache is missing or unparseable the loader
-  warns and scans the artifact directory instead. Losing the cache costs stale-artifact
-  exclusion, not the ability to run.
-- `sourcemap::SourceResolver` is where solc's debug output is decoded, and it answers
-  with `Option`. A malformed source-map entry truncates the map, an unreadable source
-  file costs that file's line numbers, and `NoSources` covers a project with no debug
-  information at all. A format change costs precision, never a run.
-- `protocol` is the host-call wire format: one table mapping a selector to an operation
-  and its parameter types, decoded by `alloy-dyn-abi`. Selectors are hashed once rather
-  than per comparison per call, and the crate holds no second implementation of the ABI
-  specification. `PROTOCOL_VERSION` is checked against the project's `Hegel.sol` before
-  any test runs.
-
-`discovery::Conventions` holds the name prefixes that decide what a test is, so the
-convention is a value rather than scattered literals.
-
-The layering is `engine` (generator FFI) under `evm` + `inspector` + `protocol` (an EVM
-host, which knows nothing about Solidity source) under `artifacts` + `sourcemap` (solc
-and Foundry) under `runner`. A frontend for another EVM language would replace only the
-last two layers.
+- Solidity reserves elementary type names and `event`, so methods named `uint256`,
+  `address`, `bool`, `bytes`, `string`, and `event` do not parse. The surface uses
+  `drawUint256`, `drawAddress`, and so on, and `recordEvent`.
+- Solidity checks that a target has code before some void-return external calls. The
+  harness installs a one-byte sentinel at the Hegel address; the inspector still
+  short-circuits every call, so the sentinel never executes and draws cost no EVM gas.
+- `hegel_target` requires a label in this ABI. The unlabelled Solidity `target(int256)`
+  uses the stable label `hegel.sol.target`.
 
 ## Coverage-guided generation
 
 The inspector records the basic blocks an example enters, keyed by contract address and
 offset, and the runner reports the count to `hegel_target`. Collection is limited to
-`JUMPDEST` so the per-opcode hook stays cheap; measured cost on the stateful benchmark is
-within noise. `--no-coverage-target` disables it.
+`JUMPDEST` so the per-opcode hook stays cheap; the stateful benchmark measured 273 ms
+with it and 275 ms without. `--no-coverage-target` disables it.
+
+## Decision log
+
+### 2026-09-15: the loop works end to end
+
+With seed 1 and 50 cases the ERC20 example finds the deliberate supply bug and shrinks it
+to `from = 0x00..00`, `to = 0x00..01`, `amount = 3` in about 50 ms after compilation,
+and the emitted blob replays the same draw trace. libhegel may return
+`HEGEL_E_STOP_TEST` while shrinking even a one-draw test; the frontend marks those
+attempts `OVERRUN` consistently.
+
+Per-case isolation clones the post-deployment `CacheDB`. Measured later at 1,000
+stateless cases with 64-element arrays and 256-byte payloads in 274 ms wall time, and
+100 stateful cases of 100 steps in 135 ms, so a journal-discard optimisation is not
+warranted.
+
+### 2026-09-15: standalone runner, not a Foundry fork
+
+A `forge test --fuzzer hegel` fork was evaluated and rejected. It would duplicate the
+working revm executor and couple this project to Foundry's internal executor APIs, which
+carry no compatibility guarantee, without adding engine capability. The magic-address
+shim is the stable integration boundary. Native upstream integration remains an optional
+future distribution path.
+
+### 2026-09-16: scaling a private suite
+
+- Independent stateless tests and stateful contracts run concurrently under `--jobs`,
+  with reports kept in discovery order.
+- `--shard NUMBER/TOTAL` partitions tests by a stable hash of the test name, so shards
+  need no central manifest.
+- Artifact discovery follows Foundry's compilation cache. This fixed a renamed contract
+  whose stale JSON under `out/` was still discovered as a test.
+- Each selected contract is deployed once; its post-deployment snapshot and `setUp()`
+  selector are shared by all of its test jobs.
+- `--fail-fast` stops sequential runs immediately and stops parallel workers from
+  claiming new jobs; running workers finish normally, so nothing is cancelled mid-EVM.
+
+### 2026-09-17: diagnostics and the report contract
+
+Failure replays resolve the top-level revert or halt program counter through the
+deployed source map and report a project-relative path, line, and column. Nested calls
+map to the top-level call or assertion that propagated the failure. The JSON report
+gained a versioned envelope; `docs/reporting.md` states the compatibility rules.
+
+A benchmark that ran as a test was removed: it asserted only that large workloads
+"passed", with Solidity assertions that mirrored the CLI flags the test itself passed.
+Workloads live in `benchmarks/` and are driven by `cargo x bench`.
+
+### 2026-09-19: decoupling and search quality
+
+The toolchain seams above were introduced. Moving the host-call protocol into one
+selector table removed a hand-rolled ABI codec and a chain that hashed up to
+twenty-four signatures per intercepted call; the `console.log` overload set grew from
+five to twenty-seven because adding one became a table row.
+
+Search quality: basic-block coverage is reported as a target score; handlers are called
+from several accounts, drawn inside the handler's span so shrinking removes the choice
+with the call, and reported as `vm.prank(...)` so counterexamples stay pasteable;
+`--allow-rule-reverts` matches Foundry's default invariant policy for ported suites.
+
+Corrections to earlier behaviour:
+
+- `--match-test` matched the literal string "stateful" as a substring, so a pattern as
+  short as `a` selected every state machine. A machine is now selected by naming one of
+  its rules or invariants, or by the exact word `stateful`.
+- A reverting `setUp()` was reported as a property failure, once per example. It is now
+  a hard error naming the contract and the revert reason.
+- A reproduce blob applied to a selection of more than one test replayed its draws into
+  whatever they produced, usually reported as passes. That is refused.
+- `hegel.note` reached the engine but never the report. `target` now takes a label so
+  unrelated scores do not share one objective.
+- ABI-drawn strings were mapped to printable ASCII while `drawString` returned raw bytes
+  rendered lossily. Both use the printable mapping, so a reported string pastes back.
+
+Test-suite boundaries: the source-location test reads the reported line back from the
+file rather than pinning a position; the sharding test uses discovery; the pool test
+asserts that a picked value was one some handler added.
+
+### 2026-09-23: repository layout by audience
+
+`contracts/` had been serving as showcase, integration-test target, and benchmark
+workload at once, with the product's own `Hegel.sol` buried inside it. The repository
+now has one directory per audience: `solidity/` for the file users install, `examples/`
+for the showcase, `benchmarks/` for workloads, and Foundry projects under
+`crates/tests-integration/projects/` for behaviour fixtures and for projects the runner
+must refuse. Shell scripts became `cargo x` subcommands in `crates/xtask`, which
+discovers Foundry projects by their `foundry.toml`. The dev-journal documents were folded
+into this log; `AGENTS.md` holds contributor conventions; `CHANGELOG.md` tracks
+user-visible change. `--root` now defaults to the current directory, since the old
+default named a directory of this repository.
+
+## Deferred work
+
+- Ecosystem validation: run against OpenZeppelin Contracts, Solady, and Uniswap v2,
+  record bugs found, false positives, and run time, and contribute a `solidity/` entry
+  to hegel-zoo if the results hold.
+- Antithesis: set `hegel_settings_set_test_location` per test and run under the
+  `workload` profile.
+- Compatibility growth: extend cheatcodes, console overloads, forked-state support, and
+  environment controls when real suites require them.

@@ -1,0 +1,17 @@
+# Integration tests that drive the runner against the Foundry projects under
+# `projects/` and the showcase in `examples/`. Keeping them in their own crate
+# gives every test binary one compiled copy of the helpers in `src/lib.rs`.
+[package]
+name = "tests-integration"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hegel-sol = { workspace = true }
+
+[lints]
+workspace = true
