@@ -26,3 +26,6 @@ will first ship.
   `--test-prefix`, `--rule-prefix`, and `--invariant-prefix` options tune a run.
 - `--root` defaults to the current directory. `Hegel.sol` is published from
   `solidity/src/` and can be remapped from a Foundry `lib/` checkout.
+- `cargo x validate` checks pinned OpenZeppelin, Solady, and Uniswap v2 properties
+  under Forge and hegel-sol; `cargo x test` includes this campaign. `cargo x profile`
+  measures a selected real-contract workload's time and peak memory.

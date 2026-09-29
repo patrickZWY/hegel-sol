@@ -1,0 +1,6 @@
+# Pinned Solidity 0.8 contracts used for ecosystem validation.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"

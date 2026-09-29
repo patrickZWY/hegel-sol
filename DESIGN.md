@@ -227,11 +227,69 @@ into this log; `AGENTS.md` holds contributor conventions; `CHANGELOG.md` tracks
 user-visible change. `--root` now defaults to the current directory, since the old
 default named a directory of this repository.
 
+### 2026-09-29: validation before the first release
+
+The synthetic workloads in [`benchmarks/`](benchmarks/) measure scaling, but they do
+not establish compatibility or bug-finding value on real contracts. The first release
+needs a repeatable comparison on pinned third-party code. The plan below guides that
+work; the [first ecosystem pass](crates/tests-integration/projects/real-world/README.md)
+records initial results and remaining measurement gaps.
+
+1. **Make runs reproducible.** Record the runner commit, upstream commit, solc and
+   Foundry versions, Rust version, machine CPU and memory, exact command, seed, case
+   count, step count, actor count, job count, and database setting. Keep upstream
+   checkouts outside the workspace so `cargo x` does not discover them as repository
+   fixtures. Keep pinned source and property harnesses under
+   `crates/tests-integration/projects/real-world/`; put regression tests for runner
+   bugs under `crates/tests-integration/projects/behaviour/`. Run external properties
+   through `cargo x validate` so the repository workflow owns their toolchain steps.
+2. **Establish correctness on real code.** Start with one ERC20 property and one
+   stateful property each for [OpenZeppelin Contracts][openzeppelin] and
+   [Solady][solady]. Then add a reserve/accounting invariant over
+   [Uniswap v2 core][uniswap]. Prefer an
+   existing Foundry test when its cheatcodes are supported; otherwise write a small
+   Foundry harness importing the pinned upstream contracts. Run the same assertion
+   under Forge first. Record each test as passed, reproducible failure, unsupported
+   feature, or harness/setup error. Replay every Hegel failure from a fresh checkout
+   and confirm the underlying assertion with Forge or a minimal Solidity test before
+   calling it a contract bug. Keep a minimized trace and source location for each
+   failure, including false positives.
+3. **Measure search and runtime separately.** On those same harnesses, compare Forge
+   and hegel-sol with matched seeds where supported, case budgets, stateful depth, and
+   actor assumptions; document any mismatch that prevents a fair comparison. Report
+   time to first confirmed failure or coverage reached at a fixed budget, rather than
+   comparing pass counts. Run cold and warm compilation separately from execution.
+   For hegel-sol, measure wall time, peak RSS, cases per second, invalid/overrun rate,
+   shrink time, replay time, and basic-block coverage. Run at least five repetitions
+   per configuration and report median and range. Use `--database off` for fresh-search
+   comparisons and a separate warm-database run for regression replay.
+4. **Profile before optimizing.** First repeat `cargo x bench` in release mode and
+   extend it with a job-count option before measuring one job against parallel jobs.
+   Profile representative stateless and stateful real-world harnesses using a sampling
+   profiler, retaining its output and exact run metadata. Attribute time to
+   compilation/artifact loading, EVM execution,
+   engine generation, coverage collection, shrinking, and report rendering. Change
+   only a measured bottleneck; rerun the same pinned workload and compare median time
+   and peak RSS before describing an improvement.
+5. **Publish an evidence table.** For each upstream revision and property, record
+   selection/discovery, support status, observed failures, confirmed bugs, false
+   positives, coverage, runtime, and reproduction artifact. Link any runner fixes to
+   a focused integration test. Release readiness requires all selected properties to
+   either run and replay deterministically or have a documented compatibility limit;
+   every reported contract bug must reproduce independently. Publish performance
+   numbers only with the workload, environment, and variance attached. If these
+   results hold, contribute a `solidity/` entry to hegel-zoo.
+
+[openzeppelin]: https://github.com/OpenZeppelin/openzeppelin-contracts
+[solady]: https://github.com/Vectorized/solady
+[uniswap]: https://github.com/Uniswap/v2-core
+
 ## Deferred work
 
-- Ecosystem validation: run against OpenZeppelin Contracts, Solady, and Uniswap v2,
-  record bugs found, false positives, and run time, and contribute a `solidity/` entry
-  to hegel-zoo if the results hold.
+- Extend ecosystem validation to more properties, failing cases with independently
+  confirmed reproduction, coverage measurements, and matched stateful baselines.
+- Attribute CPU time with a sampling profiler on a host that permits it; add
+  multi-job real-world workloads before evaluating parallel scaling.
 - Antithesis: set `hegel_settings_set_test_location` per test and run under the
   `workload` profile.
 - Compatibility growth: extend cheatcodes, console overloads, forked-state support, and

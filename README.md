@@ -126,9 +126,11 @@ a standalone runner instead of a Foundry fork.
 ```sh
 cargo x lint            # rustfmt, clippy, forge fmt, typos
 cargo x build --locked  # every crate and every Foundry project
-cargo x test            # unit and integration tests
+cargo x test            # unit, integration, and pinned real-contract tests
 cargo x demo            # three intentional failures, found and shrunk
 cargo x bench           # release-mode scaling workloads
+cargo x validate        # pinned real-contract properties under Forge and hegel-sol
+cargo x profile         # wall time, CPU time, and peak memory for one real workload
 ```
 
 CI runs the first three on every push and pull request; `cargo x lint --fix` applies
@@ -136,6 +138,11 @@ formatting and lint fixes. Enable the committed pre-push hook, which runs the sa
 checks, with `git config core.hooksPath .githooks`. Pushing a `vX.Y.Z` tag runs the
 checks again, builds a Linux binary, and publishes it with a checksum as a GitHub
 release.
+
+The [real-contract validation record][real-world]
+pins upstream revisions and records the first run's results and limits.
+
+[real-world]: crates/tests-integration/projects/real-world/README.md
 
 Conventions for contributors and coding agents: [AGENTS.md](AGENTS.md). Architecture
 and decisions: [DESIGN.md](DESIGN.md). User-visible changes: [CHANGELOG.md](CHANGELOG.md).

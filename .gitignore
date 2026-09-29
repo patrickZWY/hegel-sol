@@ -13,3 +13,5 @@
 /benchmarks/cache
 /crates/tests-integration/projects/*/out
 /crates/tests-integration/projects/*/cache
+/crates/tests-integration/projects/*/*/out
+/crates/tests-integration/projects/*/*/cache
