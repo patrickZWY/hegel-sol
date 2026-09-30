@@ -14,7 +14,7 @@ rust-version = "1.94.1"
 hegel-sol = { path = "crates/hegel-sol" }
 
 # Engine and EVM
-hegeltest-c = "=0.42.3"
+hegeltest-c = "=0.43.7"
 revm = { version = "43", default-features = false, features = ["std"] }
 alloy-json-abi = "1.7"
 alloy-dyn-abi = "1.7"
