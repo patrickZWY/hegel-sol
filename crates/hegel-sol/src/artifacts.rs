@@ -36,6 +36,11 @@ pub struct Contract {
     pub bytecode: Bytes,
     /// Artifact path, used as a stable identity for the contract.
     pub path: PathBuf,
+    /// Runtime bytecode as compiled, before immutables are filled in.
+    deployed_bytecode: Bytes,
+    /// Byte ranges of the runtime bytecode that hold immutables, which differ
+    /// between deployments of the same contract.
+    immutable_ranges: Vec<(usize, usize)>,
     sources: Arc<dyn SourceResolver>,
 }
 
@@ -77,6 +82,35 @@ impl Contract {
         self.abi
             .functions()
             .filter(move |function| function.name.starts_with(prefix))
+    }
+
+    /// Whether `code` is a deployment of this contract. Immutables are masked
+    /// on both sides, since the artifact holds zeros where a deployment holds
+    /// constructor-supplied values.
+    pub fn matches_deployed_code(&self, code: &[u8]) -> bool {
+        if self.deployed_bytecode.is_empty() || code.len() != self.deployed_bytecode.len() {
+            return false;
+        }
+        let masked = |index: usize| {
+            self.immutable_ranges
+                .iter()
+                .any(|(start, length)| (*start..start + length).contains(&index))
+        };
+        code.iter()
+            .zip(self.deployed_bytecode.iter())
+            .enumerate()
+            .all(|(index, (deployed, compiled))| deployed == compiled || masked(index))
+    }
+
+    /// External functions that may change state: what a fuzzer calls on a target.
+    pub fn mutating_functions(&self) -> impl Iterator<Item = &alloy_json_abi::Function> {
+        use alloy_json_abi::StateMutability;
+        self.abi.functions().filter(|function| {
+            matches!(
+                function.state_mutability,
+                StateMutability::NonPayable | StateMutability::Payable
+            )
+        })
     }
 
     /// The single zero-argument function with this name, if the contract has one.
@@ -200,11 +234,24 @@ pub fn load(root: &Path) -> Loaded {
             None => Arc::new(NoSources),
         };
 
+        // Unlinked libraries leave placeholders in the hex, in which case the
+        // contract simply cannot be recognised as a deployment target.
+        let deployed_bytecode =
+            alloy_primitives::hex::decode(&artifact.deployed_bytecode.object).unwrap_or_default();
+        let immutable_ranges = artifact
+            .deployed_bytecode
+            .immutable_references
+            .values()
+            .flatten()
+            .map(|range| (range.start, range.length))
+            .collect();
         contracts.push(Contract {
             name,
             abi: artifact.abi,
             bytecode: Bytes::from(bytecode),
             path: file.path,
+            deployed_bytecode: Bytes::from(deployed_bytecode),
+            immutable_ranges,
             sources,
         });
     }
@@ -229,6 +276,14 @@ struct ArtifactBytecode {
     object: String,
     #[serde(rename = "sourceMap", default)]
     source_map: String,
+    #[serde(rename = "immutableReferences", default)]
+    immutable_references: BTreeMap<String, Vec<ImmutableRange>>,
+}
+
+#[derive(Deserialize)]
+struct ImmutableRange {
+    start: usize,
+    length: usize,
 }
 
 #[derive(Deserialize)]

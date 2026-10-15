@@ -60,6 +60,43 @@ impl Harness {
         self.db.clone()
     }
 
+    /// Accounts that hold code now but held none in `base`, with that code:
+    /// the contracts deployed since the snapshot, in address order.
+    pub fn contracts_created_since(&self, base: &Database) -> Vec<(Address, Bytes)> {
+        let mut created: Vec<_> = self
+            .db
+            .cache
+            .accounts
+            .iter()
+            .filter_map(|(address, account)| {
+                let code = account.info.code.as_ref()?;
+                if code.is_empty() {
+                    return None;
+                }
+                let had_code = base
+                    .cache
+                    .accounts
+                    .get(address)
+                    .and_then(|account| account.info.code.as_ref())
+                    .is_some_and(|code| !code.is_empty());
+                (!had_code).then(|| (*address, code.original_bytes()))
+            })
+            .collect();
+        created.sort_by_key(|(address, _)| *address);
+        created
+    }
+
+    /// Runtime code at an address, if the account holds any.
+    pub fn code_at(&self, address: Address) -> Option<Bytes> {
+        self.db
+            .cache
+            .accounts
+            .get(&address)
+            .and_then(|account| account.info.code.as_ref())
+            .filter(|code| !code.is_empty())
+            .map(|code| code.original_bytes())
+    }
+
     pub fn deploy(&mut self, bytecode: Bytes) -> Result<Address> {
         let context = Context::mainnet().with_db(&mut self.db).with_cfg(config());
         let mut evm = context.build_mainnet();

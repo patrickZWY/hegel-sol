@@ -12,7 +12,8 @@ pub struct Conventions {
     pub test: String,
     /// Stateful handlers the state machine may call.
     pub rule: String,
-    /// Properties checked between handler calls.
+    /// Properties checked between handler calls. Forge's bare `invariant`
+    /// prefix also covers the `invariant_` spelling.
     pub invariant: String,
     /// Fixture run before each generated example.
     pub setup: String,
@@ -25,7 +26,7 @@ impl Default for Conventions {
         Self {
             test: "test".into(),
             rule: "rule_".into(),
-            invariant: "invariant_".into(),
+            invariant: "invariant".into(),
             setup: "setUp".into(),
             step_count: "stepCount".into(),
         }
@@ -36,3 +37,12 @@ impl Default for Conventions {
 /// are collective, so the machine is addressed by contract rather than by
 /// function.
 pub const STATEFUL_SUFFIX: &str = "stateful";
+
+/// Forge's view listing the contracts a stateful test wants fuzzed, and the one
+/// listing contracts to leave alone.
+pub const TARGET_CONTRACTS: &str = "targetContracts";
+pub const EXCLUDE_CONTRACTS: &str = "excludeContracts";
+
+/// DSTest's flag, read after a test that returned normally: a classic assertion
+/// records its failure here instead of reverting.
+pub const FAILED_FLAG: &str = "failed";

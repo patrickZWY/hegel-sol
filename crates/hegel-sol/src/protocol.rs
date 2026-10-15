@@ -15,7 +15,7 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 use alloy_dyn_abi::{DynSolType, DynSolValue};
-use alloy_primitives::{Address, keccak256};
+use alloy_primitives::{Address, B256, keccak256};
 
 /// Wire-format version of the Solidity surface in `solidity/src/Hegel.sol`.
 ///
@@ -67,6 +67,27 @@ pub enum VmOp {
     Assume,
     Addr,
     Sign,
+    Store,
+    Load,
+    /// One of forge-std's `vm.assert*` cheatcodes, which revert with a message
+    /// when the comparison fails.
+    Assert(Assertion),
+}
+
+/// The comparison a `vm.assert*` cheatcode makes. Decimal and messaged
+/// overloads share the comparison; the signature tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Assertion {
+    True,
+    False,
+    Eq,
+    NotEq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    ApproxEqAbs,
+    ApproxEqRel,
 }
 
 struct Spec<T: 'static> {
@@ -124,10 +145,26 @@ impl<T: Copy> Call<T> {
 }
 
 fn table<T: Copy>(specs: &'static [Spec<T>]) -> HashMap<[u8; 4], Call<T>> {
+    build(specs, selector)
+}
+
+/// Build a lookup keyed however the caller identifies a call: a four-byte
+/// selector for functions, a full hash for event topics.
+fn build<T: Copy, K: std::hash::Hash + Eq>(
+    specs: &'static [Spec<T>],
+    key: fn(&str) -> K,
+) -> HashMap<K, Call<T>> {
     specs
         .iter()
         .map(|spec| {
-            let params = DynSolType::parse(spec.params).unwrap_or_else(|error| {
+            // An empty parameter list means "as written in the signature", which
+            // spares the long assertion table from repeating every one.
+            let params = if spec.params.is_empty() {
+                &spec.signature[spec.signature.find('(').unwrap_or(0)..]
+            } else {
+                spec.params
+            };
+            let params = DynSolType::parse(params).unwrap_or_else(|error| {
                 panic!("invalid protocol signature {:?}: {error}", spec.signature)
             });
             debug_assert!(
@@ -135,7 +172,7 @@ fn table<T: Copy>(specs: &'static [Spec<T>]) -> HashMap<[u8; 4], Call<T>> {
                 "protocol parameters must be declared as a tuple"
             );
             (
-                selector(spec.signature),
+                key(spec.signature),
                 Call {
                     op: spec.op,
                     signature: spec.signature,
@@ -161,6 +198,17 @@ macro_rules! spec {
             signature: $signature,
             params: $params,
             named: $named,
+        }
+    };
+}
+
+macro_rules! assertion {
+    ($kind:expr, $signature:literal) => {
+        Spec {
+            op: VmOp::Assert($kind),
+            signature: $signature,
+            params: "",
+            named: false,
         }
     };
 }
@@ -290,7 +338,264 @@ static VM_SPECS: &[Spec<VmOp>] = &[
         "(uint256,bytes32)",
         false
     ),
+    spec!(
+        VmOp::Store,
+        "store(address,bytes32,bytes32)",
+        "(address,bytes32,bytes32)",
+        false
+    ),
+    spec!(
+        VmOp::Load,
+        "load(address,bytes32)",
+        "(address,bytes32)",
+        false
+    ),
+    // forge-std's assertions as declared in its `Vm` interface.
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbs(int256,int256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbs(int256,int256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbs(uint256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbs(uint256,uint256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbsDecimal(int256,int256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbsDecimal(int256,int256,uint256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbsDecimal(uint256,uint256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqAbs,
+        "assertApproxEqAbsDecimal(uint256,uint256,uint256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRel(int256,int256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRel(int256,int256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRel(uint256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRel(uint256,uint256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRelDecimal(int256,int256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRelDecimal(int256,int256,uint256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRelDecimal(uint256,uint256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::ApproxEqRel,
+        "assertApproxEqRelDecimal(uint256,uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::Eq, "assertEq(address,address)"),
+    assertion!(Assertion::Eq, "assertEq(address,address,string)"),
+    assertion!(Assertion::Eq, "assertEq(address[],address[])"),
+    assertion!(Assertion::Eq, "assertEq(address[],address[],string)"),
+    assertion!(Assertion::Eq, "assertEq(bool,bool)"),
+    assertion!(Assertion::Eq, "assertEq(bool,bool,string)"),
+    assertion!(Assertion::Eq, "assertEq(bool[],bool[])"),
+    assertion!(Assertion::Eq, "assertEq(bool[],bool[],string)"),
+    assertion!(Assertion::Eq, "assertEq(bytes,bytes)"),
+    assertion!(Assertion::Eq, "assertEq(bytes,bytes,string)"),
+    assertion!(Assertion::Eq, "assertEq(bytes32,bytes32)"),
+    assertion!(Assertion::Eq, "assertEq(bytes32,bytes32,string)"),
+    assertion!(Assertion::Eq, "assertEq(bytes32[],bytes32[])"),
+    assertion!(Assertion::Eq, "assertEq(bytes32[],bytes32[],string)"),
+    assertion!(Assertion::Eq, "assertEq(bytes[],bytes[])"),
+    assertion!(Assertion::Eq, "assertEq(bytes[],bytes[],string)"),
+    assertion!(Assertion::Eq, "assertEq(int256,int256)"),
+    assertion!(Assertion::Eq, "assertEq(int256,int256,string)"),
+    assertion!(Assertion::Eq, "assertEq(int256[],int256[])"),
+    assertion!(Assertion::Eq, "assertEq(int256[],int256[],string)"),
+    assertion!(Assertion::Eq, "assertEq(string,string)"),
+    assertion!(Assertion::Eq, "assertEq(string,string,string)"),
+    assertion!(Assertion::Eq, "assertEq(string[],string[])"),
+    assertion!(Assertion::Eq, "assertEq(string[],string[],string)"),
+    assertion!(Assertion::Eq, "assertEq(uint256,uint256)"),
+    assertion!(Assertion::Eq, "assertEq(uint256,uint256,string)"),
+    assertion!(Assertion::Eq, "assertEq(uint256[],uint256[])"),
+    assertion!(Assertion::Eq, "assertEq(uint256[],uint256[],string)"),
+    assertion!(Assertion::Eq, "assertEqDecimal(int256,int256,uint256)"),
+    assertion!(
+        Assertion::Eq,
+        "assertEqDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(Assertion::Eq, "assertEqDecimal(uint256,uint256,uint256)"),
+    assertion!(
+        Assertion::Eq,
+        "assertEqDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::False, "assertFalse(bool)"),
+    assertion!(Assertion::False, "assertFalse(bool,string)"),
+    assertion!(Assertion::Ge, "assertGe(int256,int256)"),
+    assertion!(Assertion::Ge, "assertGe(int256,int256,string)"),
+    assertion!(Assertion::Ge, "assertGe(uint256,uint256)"),
+    assertion!(Assertion::Ge, "assertGe(uint256,uint256,string)"),
+    assertion!(Assertion::Ge, "assertGeDecimal(int256,int256,uint256)"),
+    assertion!(
+        Assertion::Ge,
+        "assertGeDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(Assertion::Ge, "assertGeDecimal(uint256,uint256,uint256)"),
+    assertion!(
+        Assertion::Ge,
+        "assertGeDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::Gt, "assertGt(int256,int256)"),
+    assertion!(Assertion::Gt, "assertGt(int256,int256,string)"),
+    assertion!(Assertion::Gt, "assertGt(uint256,uint256)"),
+    assertion!(Assertion::Gt, "assertGt(uint256,uint256,string)"),
+    assertion!(Assertion::Gt, "assertGtDecimal(int256,int256,uint256)"),
+    assertion!(
+        Assertion::Gt,
+        "assertGtDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(Assertion::Gt, "assertGtDecimal(uint256,uint256,uint256)"),
+    assertion!(
+        Assertion::Gt,
+        "assertGtDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::Le, "assertLe(int256,int256)"),
+    assertion!(Assertion::Le, "assertLe(int256,int256,string)"),
+    assertion!(Assertion::Le, "assertLe(uint256,uint256)"),
+    assertion!(Assertion::Le, "assertLe(uint256,uint256,string)"),
+    assertion!(Assertion::Le, "assertLeDecimal(int256,int256,uint256)"),
+    assertion!(
+        Assertion::Le,
+        "assertLeDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(Assertion::Le, "assertLeDecimal(uint256,uint256,uint256)"),
+    assertion!(
+        Assertion::Le,
+        "assertLeDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::Lt, "assertLt(int256,int256)"),
+    assertion!(Assertion::Lt, "assertLt(int256,int256,string)"),
+    assertion!(Assertion::Lt, "assertLt(uint256,uint256)"),
+    assertion!(Assertion::Lt, "assertLt(uint256,uint256,string)"),
+    assertion!(Assertion::Lt, "assertLtDecimal(int256,int256,uint256)"),
+    assertion!(
+        Assertion::Lt,
+        "assertLtDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(Assertion::Lt, "assertLtDecimal(uint256,uint256,uint256)"),
+    assertion!(
+        Assertion::Lt,
+        "assertLtDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::NotEq, "assertNotEq(address,address)"),
+    assertion!(Assertion::NotEq, "assertNotEq(address,address,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(address[],address[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(address[],address[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bool,bool)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bool,bool,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bool[],bool[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(bool[],bool[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes,bytes)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes,bytes,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes32,bytes32)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes32,bytes32,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes32[],bytes32[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes32[],bytes32[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes[],bytes[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(bytes[],bytes[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(int256,int256)"),
+    assertion!(Assertion::NotEq, "assertNotEq(int256,int256,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(int256[],int256[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(int256[],int256[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(string,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(string,string,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(string[],string[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(string[],string[],string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(uint256,uint256)"),
+    assertion!(Assertion::NotEq, "assertNotEq(uint256,uint256,string)"),
+    assertion!(Assertion::NotEq, "assertNotEq(uint256[],uint256[])"),
+    assertion!(Assertion::NotEq, "assertNotEq(uint256[],uint256[],string)"),
+    assertion!(
+        Assertion::NotEq,
+        "assertNotEqDecimal(int256,int256,uint256)"
+    ),
+    assertion!(
+        Assertion::NotEq,
+        "assertNotEqDecimal(int256,int256,uint256,string)"
+    ),
+    assertion!(
+        Assertion::NotEq,
+        "assertNotEqDecimal(uint256,uint256,uint256)"
+    ),
+    assertion!(
+        Assertion::NotEq,
+        "assertNotEqDecimal(uint256,uint256,uint256,string)"
+    ),
+    assertion!(Assertion::True, "assertTrue(bool)"),
+    assertion!(Assertion::True, "assertTrue(bool,string)"),
 ];
+
+/// DSTest's diagnostic events, which a classic assertion emits before marking
+/// the test failed. Keyed by the full event signature hash.
+static DSTEST_LOG_SPECS: &[Spec<()>] = &[
+    spec!((), "log(string)", "", false),
+    spec!((), "logs(bytes)", "", false),
+    spec!((), "log_address(address)", "", false),
+    spec!((), "log_bytes32(bytes32)", "", false),
+    spec!((), "log_int(int256)", "", false),
+    spec!((), "log_uint(uint256)", "", false),
+    spec!((), "log_bytes(bytes)", "", false),
+    spec!((), "log_string(string)", "", false),
+    spec!((), "log_named_address(string,address)", "", false),
+    spec!((), "log_named_bytes32(string,bytes32)", "", false),
+    spec!(
+        (),
+        "log_named_decimal_int(string,int256,uint256)",
+        "",
+        false
+    ),
+    spec!(
+        (),
+        "log_named_decimal_uint(string,uint256,uint256)",
+        "",
+        false
+    ),
+    spec!((), "log_named_int(string,int256)", "", false),
+    spec!((), "log_named_uint(string,uint256)", "", false),
+    spec!((), "log_named_bytes(string,bytes)", "", false),
+    spec!((), "log_named_string(string,string)", "", false),
+];
+
+static DSTEST_LOG_TABLE: LazyLock<HashMap<B256, Call<()>>> =
+    LazyLock::new(|| build(DSTEST_LOG_SPECS, |signature| keccak256(signature)));
+
+pub fn dstest_log(topic: &B256) -> Option<&'static Call<()>> {
+    DSTEST_LOG_TABLE.get(topic)
+}
 
 static HEGEL_TABLE: LazyLock<HashMap<[u8; 4], Call<Op>>> = LazyLock::new(|| table(HEGEL_SPECS));
 static VM_TABLE: LazyLock<HashMap<[u8; 4], Call<VmOp>>> = LazyLock::new(|| table(VM_SPECS));

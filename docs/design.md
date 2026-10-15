@@ -349,6 +349,35 @@ cannot leak one into the next step.
 Test contracts are exempt from the EVM code-size limit, as under Forge, so a large
 upstream test contract deploys without enabling the optimizer.
 
+### 2026-10-15: Forge-style invariants and assertions
+
+Forge suites rarely write `rule_*` handlers; they deploy handler contracts in `setUp()`
+and either register them with `targetContracts()` or let every deployed contract be a
+target. The runner now discovers those targets by running the fixture once on a
+throwaway copy of the post-deployment state, reading `targetContracts()` and
+`excludeContracts()`, falling back to the accounts that gained code during the fixture,
+and matching each target's runtime code to a compiled artifact with immutables masked.
+Each target's state-changing functions become rules alongside any `rule_*` handlers, so
+scheduling, spans, actors, and shrinking are unchanged. Target rules treat a revert as a
+rejected step regardless of `--allow-rule-reverts`, because that is the policy the
+suites were written against. The default invariant prefix became Forge's bare
+`invariant`.
+
+Two assertion styles had to work for such suites to fail honestly. forge-std's `assert*`
+helpers call `vm.assert*` cheatcodes when a comparison fails; those are a generated
+table of 116 selectors that revert the cheatcode call with a message in Forge's wording.
+Classic DSTest instead emits `log*` events, sets a flag through `vm.store` on the
+cheatcode address, and returns normally; the runner emulates `store` and `load`, calls
+`failed()` after a test or invariant that returned, and captures the events as console
+lines. Without this, Solady's `ERC20Test` passes could not have failed: a failing
+`assertEq` would have surfaced as an unsupported cheatcode.
+
+The first fixture for target discovery hid a lesson about fixtures rather than the
+runner: a bug that only shows when a ledger has no slack is practically unreachable by
+random sequences, while the engine's swarm selection, which enables a random subset of
+rules per case, makes single-rule cases common. Fixture bugs should corrupt an
+accounting identity unconditionally, as the showcase example does.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
@@ -359,4 +388,4 @@ upstream test contract deploys without enabling the optimizer.
   `workload` profile.
 - Compatibility growth: extend cheatcodes, console overloads, forked-state support, and
   environment controls when real suites require them. Known from Solady's suites:
-  Forge's target-contract invariant style and `vm.getBlockNumber`.
+  `vm.getBlockNumber`. Forge's `targetSelectors` and `targetSenders` are not read.

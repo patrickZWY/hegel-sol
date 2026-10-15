@@ -60,10 +60,16 @@ After them the 29 tests of `ERC20Test` and the 4 of `ERC20ForPermit2Test` pass u
 hegel-sol as they do under Forge, with no false failures.
 
 Solady's `_random()` draws from a storage-seeded hash rather than from the fuzzer, so
-the values it feeds are outside the engine's control and would not shrink. Two
-compatibility limits remain: `ERC20Invariants` declares its invariant in Forge's
-target-contract style, so only its code-size test is discovered, and the neighbouring
-`ERC20VotesTest` uses `vm.getBlockNumber`, which is not emulated.
+the values it feeds are outside the engine's control and would not shrink. The
+neighbouring `ERC20VotesTest` uses `vm.getBlockNumber`, which is not emulated.
+
+`ERC20Invariants` declares its property in Forge's target-contract style: `setUp()`
+deploys a `BalanceSum` handler over the token and registers it, and
+`invariantBalanceSum` compares the token's supply with the handler's running sum
+through `assertEq`. It now runs under both runners, which gives the first stateful
+Forge baseline: `cargo x validate` runs it under Forge with `FOUNDRY_INVARIANT_RUNS`
+and `FOUNDRY_INVARIANT_DEPTH` set to the same case and step counts hegel-sol receives.
+Both pass; neither runner has found a failure to compare on.
 
 ## First pass: 2026-09-29
 

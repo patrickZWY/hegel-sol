@@ -119,7 +119,7 @@ struct TestArgs {
     #[arg(long, default_value = "rule_")]
     rule_prefix: String,
     /// Prefix identifying stateful properties.
-    #[arg(long, default_value = "invariant_")]
+    #[arg(long, default_value = "invariant")]
     invariant_prefix: String,
 }
 

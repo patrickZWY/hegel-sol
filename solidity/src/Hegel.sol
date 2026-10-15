@@ -114,6 +114,10 @@ interface IHegelVm {
     function label(address account, string calldata label) external;
     /// @notice Reject the current generated example unless condition is true.
     function assume(bool condition) external;
+    /// @notice Write a storage slot of any account.
+    function store(address target, bytes32 slot, bytes32 value) external;
+    /// @notice Read a storage slot of any account.
+    function load(address target, bytes32 slot) external view returns (bytes32);
     /// @notice Address of the account a secp256k1 private key controls.
     function addr(uint256 privateKey) external pure returns (address);
     /// @notice Sign a digest with a private key, in the form `ecrecover` takes.

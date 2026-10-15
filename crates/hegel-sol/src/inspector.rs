@@ -21,9 +21,17 @@ use crate::{
         Error, Pool, TestCase,
         integer::{i256_from_le_signed, i256_to_le_signed, u256_from_le_signed, u256_to_le_signed},
     },
-    protocol::{self, Op, VmOp},
+    protocol::{self, Assertion, Op, VmOp},
     values::{self, format_value},
 };
+
+/// What an intercepted cheatcode hands back to the EVM.
+enum VmOutcome {
+    Return(Bytes),
+    /// The cheatcode itself reverts with this data, as a failed assertion does,
+    /// so the test sees an ordinary revert it can propagate or expect.
+    Revert(Bytes),
+}
 
 /// JUMPDEST. Recording coverage only at basic-block entries keeps the per-opcode
 /// `step` hook cheap while still distinguishing the paths a test took.
@@ -375,7 +383,7 @@ impl<'a> HegelInspector<'a> {
         &mut self,
         ctx: &mut RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>>,
         data: &[u8],
-    ) -> Result<Bytes, Abort> {
+    ) -> Result<VmOutcome, Abort> {
         let (selector, args) = split_selector(data).ok_or_else(|| {
             Abort::Error("cheatcode call arrived without a four-byte selector".into())
         })?;
@@ -446,7 +454,40 @@ impl<'a> HegelInspector<'a> {
             }
             VmOp::Addr => {
                 let key = signing_key(arg_u256(args, 0)?, "vm.addr")?;
-                return Ok(encode(DynSolValue::Address(key_address(&key))));
+                return Ok(VmOutcome::Return(encode(DynSolValue::Address(
+                    key_address(&key),
+                ))));
+            }
+            VmOp::Store => {
+                let address = arg_address(args, 0)?;
+                let key = U256::from_be_bytes(arg_b256(args, 1)?.0);
+                let value = U256::from_be_bytes(arg_b256(args, 2)?.0);
+                ctx.journaled_state
+                    .load_account(address)
+                    .map_err(|_| Abort::Error("failed to load account for vm.store".into()))?;
+                ctx.journaled_state
+                    .sstore(address, key, value)
+                    .map_err(|_| Abort::Error("vm.store could not write the slot".into()))?;
+            }
+            VmOp::Load => {
+                let address = arg_address(args, 0)?;
+                let key = U256::from_be_bytes(arg_b256(args, 1)?.0);
+                ctx.journaled_state
+                    .load_account(address)
+                    .map_err(|_| Abort::Error("failed to load account for vm.load".into()))?;
+                let value = ctx
+                    .journaled_state
+                    .sload(address, key)
+                    .map_err(|_| Abort::Error("vm.load could not read the slot".into()))?;
+                return Ok(VmOutcome::Return(encode(DynSolValue::FixedBytes(
+                    B256::from(value.data),
+                    32,
+                ))));
+            }
+            VmOp::Assert(assertion) => {
+                if let Some(message) = failed_assertion(assertion, call.signature, args)? {
+                    return Ok(VmOutcome::Revert(revert_message(&message)));
+                }
             }
             VmOp::Sign => {
                 let key = signing_key(arg_u256(args, 0)?, "vm.sign")?;
@@ -455,11 +496,11 @@ impl<'a> HegelInspector<'a> {
                     .sign_prehash_recoverable(digest.as_slice())
                     .map_err(|error| Abort::Error(format!("vm.sign failed: {error}")))?;
                 let (r, s) = signature.split_bytes();
-                return Ok(encode_params(vec![
+                return Ok(VmOutcome::Return(encode_params(vec![
                     DynSolValue::Uint(U256::from(27 + recovery.to_byte()), 8),
                     DynSolValue::FixedBytes(B256::from_slice(&r), 32),
                     DynSolValue::FixedBytes(B256::from_slice(&s), 32),
-                ]));
+                ])));
             }
             VmOp::Label => {
                 self.labels
@@ -471,7 +512,31 @@ impl<'a> HegelInspector<'a> {
                 }
             }
         }
-        Ok(Bytes::new())
+        Ok(VmOutcome::Return(Bytes::new()))
+    }
+
+    /// Render a DSTest diagnostic event the way Forge prints it, so a classic
+    /// assertion's explanation reaches the report alongside `console.log`.
+    fn capture_dstest_log(&mut self, log: &Log) {
+        let Some(call) = log.topics().first().and_then(protocol::dstest_log) else {
+            return;
+        };
+        let rendered = match call.decode(&log.data.data) {
+            Ok(values) => {
+                let mut parts = values.iter().map(|value| match value {
+                    DynSolValue::Address(address) => self.display(*address),
+                    DynSolValue::String(text) => text.clone(),
+                    other => format_value(other),
+                });
+                match (parts.next(), parts.next()) {
+                    (Some(key), Some(value)) => format!("{key}: {value}"),
+                    (Some(value), None) => value,
+                    _ => String::new(),
+                }
+            }
+            Err(error) => format!("<{error}>"),
+        };
+        self.console.push(format!("log: {rendered}"));
     }
 
     fn capture_console(&mut self, data: &[u8]) {
@@ -559,7 +624,8 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
         if inputs.target_address == protocol::hevm_address() {
             let input = inputs.input.bytes(ctx);
             let (instruction, output) = match self.dispatch_vm(ctx, &input) {
-                Ok(output) => (InstructionResult::Return, output),
+                Ok(VmOutcome::Return(output)) => (InstructionResult::Return, output),
+                Ok(VmOutcome::Revert(output)) => (InstructionResult::Revert, output),
                 Err(abort) => {
                     self.outcome = Some(abort);
                     (InstructionResult::Revert, Bytes::new())
@@ -599,6 +665,9 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
     }
 
     fn log(&mut self, ctx: &mut RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>>, log: Log) {
+        if log.address == self.trace_target {
+            self.capture_dstest_log(&log);
+        }
         let depth = ctx.journaled_state.depth();
         // Until the call under check starts, an event from the declaring frame is
         // the example of what to expect, not a candidate.
@@ -664,6 +733,108 @@ fn signing_key(key: U256, cheatcode: &str) -> Result<k256::ecdsa::SigningKey, Ab
 fn key_address(key: &k256::ecdsa::SigningKey) -> Address {
     let point = key.verifying_key().to_encoded_point(false);
     Address::from_raw_public_key(&point.as_bytes()[1..])
+}
+
+/// Evaluate a `vm.assert*` call, returning the message to revert with when it
+/// fails. Messaged overloads end in a string; decimal overloads carry a decimals
+/// argument before it, which only affects Forge's rendering and is dropped here.
+fn failed_assertion(
+    assertion: Assertion,
+    signature: &str,
+    args: &[DynSolValue],
+) -> Result<Option<String>, Abort> {
+    let mut args = args.to_vec();
+    let message = match args.last() {
+        Some(DynSolValue::String(_)) => match args.pop() {
+            Some(DynSolValue::String(text)) => Some(text),
+            _ => None,
+        },
+        _ => None,
+    };
+    if signature.contains("Decimal") {
+        args.pop();
+    }
+    let value = |index: usize| args.get(index).map(format_value).unwrap_or_default();
+    let numeric = |index: usize| -> Result<I256, Abort> {
+        match args.get(index) {
+            Some(DynSolValue::Uint(value, _)) => {
+                I256::checked_from_sign_and_abs(alloy_primitives::Sign::Positive, *value)
+                    .ok_or_else(|| Abort::Error(format!("{signature}: value does not fit int256")))
+            }
+            Some(DynSolValue::Int(value, _)) => Ok(*value),
+            _ => Err(mismatch(index, "a number")),
+        }
+    };
+    let failure = match assertion {
+        Assertion::True => (!arg_bool(&args, 0)?).then(|| "assertion failed".to_owned()),
+        Assertion::False => arg_bool(&args, 0)?.then(|| "assertion failed".to_owned()),
+        Assertion::Eq => {
+            (args.first() != args.get(1)).then(|| format!("{} != {}", value(0), value(1)))
+        }
+        Assertion::NotEq => {
+            (args.first() == args.get(1)).then(|| format!("{} == {}", value(0), value(1)))
+        }
+        Assertion::Lt | Assertion::Le | Assertion::Gt | Assertion::Ge => {
+            let (left, right) = (numeric(0)?, numeric(1)?);
+            let (holds, violated) = match assertion {
+                Assertion::Lt => (left < right, ">="),
+                Assertion::Le => (left <= right, ">"),
+                Assertion::Gt => (left > right, "<="),
+                _ => (left >= right, "<"),
+            };
+            (!holds).then(|| format!("{} {violated} {}", value(0), value(1)))
+        }
+        Assertion::ApproxEqAbs => {
+            let (left, right) = (numeric(0)?, numeric(1)?);
+            let max_delta = arg_u256(&args, 2)?;
+            let delta = absolute_difference(left, right);
+            (delta > max_delta).then(|| {
+                format!(
+                    "{} !~= {} (max delta: {max_delta}, real delta: {delta})",
+                    value(0),
+                    value(1)
+                )
+            })
+        }
+        Assertion::ApproxEqRel => {
+            let (left, right) = (numeric(0)?, numeric(1)?);
+            let max_percent = arg_u256(&args, 2)?;
+            // Forge expresses the bound as a fraction of `right` scaled by 1e18,
+            // and a zero reference requires exact equality.
+            let delta = absolute_difference(left, right);
+            let scale = U256::from(10).pow(U256::from(18));
+            let percent = if right.is_zero() {
+                if left == right { U256::ZERO } else { U256::MAX }
+            } else {
+                delta
+                    .checked_mul(scale)
+                    .map_or(U256::MAX, |scaled| scaled / right.unsigned_abs())
+            };
+            (percent > max_percent).then(|| {
+                format!(
+                    "{} !~= {} (max delta: {max_percent}, real delta: {percent})",
+                    value(0),
+                    value(1)
+                )
+            })
+        }
+    };
+    Ok(failure.map(|detail| match message {
+        Some(message) => format!("{message}: {detail}"),
+        None => format!("assertion failed: {detail}"),
+    }))
+}
+
+/// `|left - right|` as a magnitude, saturating where int256 cannot hold it.
+fn absolute_difference(left: I256, right: I256) -> U256 {
+    let (larger, smaller) = if left >= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    larger
+        .checked_sub(smaller)
+        .map_or(U256::MAX, |delta| delta.unsigned_abs())
 }
 
 /// Revert data a Solidity `revert("message")` would produce, so the runner's own

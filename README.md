@@ -47,7 +47,7 @@ contract TokenTest is HegelTest {
 `hegel` also draws signed integers, booleans, bytes, and strings, and provides spans,
 notes, targets, events, and pools. The NatSpec in `Hegel.sol` is the full reference.
 
-For a stateful test, write handlers named `rule_*` and properties named `invariant_*`.
+For a stateful test, write handlers named `rule_*` and properties named `invariant*`.
 The runner calls handlers in generated sequences from several accounts, checks the
 invariants along the way, and shrinks a failure to the shortest sequence that causes it.
 
@@ -59,6 +59,11 @@ contract CounterTest {
     function invariant_bounded() public view { assert(value < 1_000); }
 }
 ```
+
+Forge-style invariant tests run as well: a test that deploys handler contracts in
+`setUp()` and registers them through `targetContracts()`, or leaves every contract it
+deployed as a target, has those contracts' state-changing functions called instead, with
+a reverting call treated as a skipped step as under Forge.
 
 `setUp()` runs before every generated case. [`examples/`](examples) is a complete
 project with one test per feature.
@@ -103,12 +108,14 @@ the basic blocks each example reaches; `--no-coverage-target` turns that off.
 ## Foundry compatibility
 
 Supported cheatcodes: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`,
-`expectRevert`, `expectEmit`, `label`, `assume`, `addr`, and `sign`. `console.log`
-output and custom errors are decoded, and test contracts are exempt from the code-size
-limit as in Forge. Forked state and Forge's target-contract invariant style are not
-supported: this is a standalone runner, not a Foundry fork. Solady's own ERC20 suite and
-pinned OpenZeppelin, Solady, and Uniswap v2 properties run under both Forge and hegel-sol
-in CI; the [validation record][real-world] has the results.
+`expectRevert`, `expectEmit`, `label`, `assume`, `addr`, `sign`, `store`, `load`, and the
+`assert*` family forge-std delegates to. Classic DSTest assertions, which record a
+failure instead of reverting, are read back after the test together with their logged
+diagnostics. `console.log` output and custom errors are decoded, and test contracts are
+exempt from the code-size limit as in Forge. Forked state is not supported: this is a
+standalone runner, not a Foundry fork. Solady's own ERC20 suite and invariant, and
+pinned OpenZeppelin, Solady, and Uniswap v2 properties, run under both Forge and
+hegel-sol in CI; the [validation record][real-world] has the results.
 
 ## More
 

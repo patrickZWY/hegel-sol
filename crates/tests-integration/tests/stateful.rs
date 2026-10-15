@@ -121,3 +121,27 @@ fn a_single_actor_run_reports_no_sender() {
             .any(|draw| draw.kind == "sender")
     );
 }
+
+/// Forge suites register handler contracts rather than writing `rule_*`
+/// functions. Their state-changing functions become the rules, reverts are
+/// rejected steps as under Forge, and shrinking still deletes whole calls.
+#[test]
+fn forge_style_targets_are_fuzzed_and_shrink_like_handlers() {
+    for contract in ["ExplicitTargetTest", "DefaultTargetTest"] {
+        let execution = run_project(&Options {
+            test_cases: 300,
+            ..options(behaviour(), contract)
+        })
+        .unwrap();
+        let report = only(&execution);
+
+        assert!(execution.failed(), "{contract}: {:?}", report.origin);
+        // One credit of at least three and one debit of exactly three is the
+        // shortest sequence that double counts; the bystander is never called.
+        assert_eq!(
+            rules(report),
+            ["Ledger.credit", "Ledger.debit"],
+            "{contract}"
+        );
+    }
+}

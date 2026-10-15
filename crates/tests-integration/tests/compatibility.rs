@@ -132,3 +132,54 @@ fn overloaded_tests_are_named_by_their_signatures() {
     .unwrap();
     assert_eq!(narrowed, ["OverloadedTest.test_same(uint8)"]);
 }
+
+/// forge-std's assertions call `vm.assert*` cheatcodes when a comparison fails.
+#[test]
+fn assertion_cheatcodes_fail_the_test_with_a_readable_message() {
+    let execution = run_project(&Options {
+        test_cases: 50,
+        ..options(behaviour(), "VmAssertTest")
+    })
+    .unwrap();
+
+    assert_eq!(
+        statuses(&execution),
+        [
+            (
+                "VmAssertTest.test_failing_assertion_reverts_with_its_message",
+                "failed"
+            ),
+            ("VmAssertTest.test_passing_assertions_are_silent", "passed"),
+        ]
+    );
+    assert_eq!(
+        execution.reports[0].origin.as_deref(),
+        Some("revert: assertion failed: 0 != 7")
+    );
+}
+
+/// Classic DSTest marks a failure in storage and returns normally, so the runner
+/// has to ask `failed()` afterwards and surface the logged explanation.
+#[test]
+fn a_recorded_dstest_failure_is_reported_with_its_logs() {
+    let execution = run_project(&Options {
+        test_cases: 50,
+        ..options(behaviour(), "DSTestStyleTest")
+    })
+    .unwrap();
+    let report = only(&execution);
+
+    assert!(execution.failed());
+    assert!(
+        report
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.contains("without reverting")),
+        "{:?}",
+        report.origin
+    );
+    assert_eq!(
+        report.console,
+        ["log: Error: value == 7 not satisfied", "log:   Actual: 0"]
+    );
+}

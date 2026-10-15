@@ -7,6 +7,16 @@ commit.
 
 ### Features
 
+- Forge-style invariant tests run unchanged. A test with `invariant*` functions that
+  registers handler contracts through `targetContracts()`, or leaves every contract its
+  `setUp()` deployed as a target, has those contracts' state-changing functions driven
+  by the state machine, minus any `excludeContracts()` names. A reverting target call
+  is a skipped step, as under Forge. The default invariant prefix is now Forge's bare
+  `invariant`, which still matches `invariant_`.
+- forge-std's assertions work: the `vm.assert*` cheatcode family reverts with a
+  readable message such as `assertion failed: 0 != 7`, and classic DSTest suites that
+  record a failure through `vm.store` and `failed()` are reported as failed with their
+  logged diagnostics. `vm.store` and `vm.load` are emulated for any account.
 - Solady's own ERC20 test suite runs unchanged and passes every test Forge passes.
   The emulated cheatcodes grew by `expectEmit` in all four overloads, `addr`, and
   `sign`, and the EVM code-size limit no longer applies to test contracts, as in

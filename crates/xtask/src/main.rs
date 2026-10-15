@@ -444,6 +444,46 @@ fn validate(args: Validate) -> Result<()> {
         ))?;
     }
 
+    // Forge's invariant runner takes its budget from configuration rather than
+    // flags; the environment overrides give it the same shape as hegel-sol's.
+    section("Solady upstream ERC20 invariant: Forge");
+    let mut baseline = Command::new("forge");
+    baseline.args([
+        "test",
+        "--root",
+        SOLADY_ROOT,
+        "--match-contract",
+        "^ERC20Invariants$",
+        "--match-test",
+        "^invariant",
+    ]);
+    baseline.env("FOUNDRY_INVARIANT_RUNS", &stateful_cases);
+    baseline.env("FOUNDRY_INVARIANT_DEPTH", &stateful_steps);
+    baseline.env("FOUNDRY_FUZZ_SEED", &seed);
+    baseline.current_dir(workspace());
+    run(baseline)?;
+    section("Solady upstream ERC20 invariant: hegel-sol");
+    run(runner_cmd(
+        &runner,
+        [
+            "--root",
+            SOLADY_ROOT,
+            "--match-contract",
+            "ERC20Invariants",
+            "--match-test",
+            "stateful",
+            "--test-cases",
+            &stateful_cases,
+            "--step-count",
+            &stateful_steps,
+            "--seed",
+            &seed,
+            "--database",
+            "off",
+            "--show-timings",
+        ],
+    ))?;
+
     section("Uniswap v2 core: Forge swap baseline");
     let mut baseline = Command::new("forge");
     baseline.args([
