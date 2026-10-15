@@ -7,21 +7,22 @@ use std::{
 
 use hegel_c::{
     HEGEL_STATE_MACHINE_DONE, HegelContext, HegelFailure, HegelPool, HegelRun, HegelRunResult,
-    HegelSettings, HegelStateMachine, HegelTestCase, hegel_event, hegel_failure_free,
-    hegel_failure_origin, hegel_failure_reproduction_blob, hegel_generate_boolean,
-    hegel_generate_bytes, hegel_generate_bytes_result_free, hegel_generate_bytes_result_t,
-    hegel_generate_integer, hegel_generate_integer_big, hegel_label_from_name, hegel_mark_complete,
-    hegel_new_pool, hegel_new_state_machine, hegel_next_test_case, hegel_note, hegel_pool_add,
-    hegel_pool_free, hegel_pool_generate, hegel_run_free, hegel_run_result, hegel_run_result_error,
-    hegel_run_result_failure, hegel_run_result_failure_count, hegel_run_result_free,
-    hegel_run_result_status, hegel_run_start, hegel_run_status_t, hegel_settings_free,
+    HegelSettings, HegelStateMachine, HegelTestCase, hegel_event, hegel_failure_caveat,
+    hegel_failure_free, hegel_failure_origin, hegel_failure_reproduction_blob,
+    hegel_generate_boolean, hegel_generate_bytes, hegel_generate_bytes_result_free,
+    hegel_generate_bytes_result_t, hegel_generate_integer, hegel_generate_integer_big,
+    hegel_label_from_name, hegel_mark_complete, hegel_new_pool, hegel_new_state_machine,
+    hegel_next_test_case, hegel_note, hegel_pool_add, hegel_pool_free, hegel_pool_generate,
+    hegel_run_free, hegel_run_result, hegel_run_result_error, hegel_run_result_failure,
+    hegel_run_result_failure_count, hegel_run_result_free, hegel_run_result_status,
+    hegel_run_start, hegel_run_start_blob, hegel_run_status_t, hegel_settings_free,
     hegel_settings_new, hegel_settings_new_for_profile, hegel_settings_set_database,
     hegel_settings_set_database_key, hegel_settings_set_phases, hegel_settings_set_print_blob,
     hegel_settings_set_seed, hegel_settings_set_test_cases, hegel_settings_set_verbosity,
     hegel_start_span, hegel_state_machine_free, hegel_state_machine_next_group,
     hegel_state_machine_next_rule, hegel_state_machine_rule_rejected,
     hegel_state_machine_should_check_invariant, hegel_status_t, hegel_stop_span, hegel_target,
-    hegel_test_case_free, hegel_test_case_from_blob,
+    hegel_test_case_free, hegel_test_case_from_blob, hegel_test_case_should_capture,
 };
 
 pub mod integer;
@@ -218,6 +219,33 @@ impl Settings {
         })
     }
 
+    /// Start a run that replays a reproduction blob instead of exploring.
+    ///
+    /// The engine retries the replay a bounded number of times and reports a
+    /// reproducing attempt as the run's single failure, so the caller drives it
+    /// exactly like an exploring run. A run that ends without a failure means
+    /// the blob no longer reproduces.
+    pub fn start_run_blob(&self, blob: &str) -> Result<Run> {
+        let blob = CString::new(blob)?;
+        let mut raw = ptr::null_mut();
+        let rc = unsafe {
+            hegel_run_start_blob(
+                self.ctx.raw(),
+                self.raw(),
+                blob.as_ptr(),
+                None,
+                ptr::null_mut(),
+                &mut raw,
+            )
+        };
+        self.ctx.check(rc)?;
+        Ok(Run {
+            ctx: self.ctx.clone(),
+            raw: NonNull::new(raw)
+                .ok_or_else(|| Error::Engine("libhegel returned a null run handle".into()))?,
+        })
+    }
+
     pub fn test_case_from_blob(&self, blob: &str) -> Result<TestCase> {
         let blob = CString::new(blob)?;
         let mut raw = ptr::null_mut();
@@ -319,6 +347,20 @@ impl TestCase {
 
     fn raw(&self) -> *mut HegelTestCase {
         self.raw.as_ptr()
+    }
+
+    /// Whether the engine stamped this case as material for a failure report.
+    ///
+    /// The engine re-executes every failure it is about to report, and stamps
+    /// that execution, so a frontend keeps the output of stamped failing cases
+    /// per origin and reports from the freshest one instead of replaying the
+    /// blob after the run. Read once at case start.
+    pub fn should_capture(&self) -> Result<bool> {
+        let mut capture = false;
+        let rc =
+            unsafe { hegel_test_case_should_capture(self.ctx.raw(), self.raw(), &mut capture) };
+        self.ctx.check(rc)?;
+        Ok(capture)
     }
 
     pub fn integer_big(&self, min: &[u8], max: &[u8]) -> Result<Vec<u8>> {
@@ -469,6 +511,8 @@ impl TestCase {
                 self.raw(),
                 rule_ptrs.as_ptr(),
                 rule_groups.as_ptr(),
+                // Null keeps every rule at the same weight.
+                ptr::null(),
                 rule_ptrs.len(),
                 invariant_ptrs.as_ptr(),
                 invariant_always_check.as_ptr(),
@@ -701,6 +745,11 @@ impl Failure {
         self.string_value(hegel_failure_reproduction_blob)
     }
 
+    /// How reliably the failure reproduced, or `None` for a deterministic one.
+    pub fn caveat(&self) -> Result<Option<String>> {
+        self.string_value(hegel_failure_caveat)
+    }
+
     fn string_value(
         &self,
         getter: unsafe extern "C" fn(
@@ -748,11 +797,19 @@ mod tests {
             .set_test_cases(50)
             .unwrap();
         let mut run = settings.start_run().unwrap();
+        // The engine hands back no values, so the shrunk example is observed by
+        // keeping the last failing execution it stamped for capture.
+        let mut captured = None;
         while let Some(mut tc) = run.next_test_case().unwrap() {
+            let capture = tc.should_capture().unwrap();
             match tc.integer(0, 100) {
-                Ok(value) if value > 10 => tc
-                    .mark_complete(Status::Interesting, Some("value > 10"))
-                    .unwrap(),
+                Ok(value) if value > 10 => {
+                    if capture {
+                        captured = Some(value);
+                    }
+                    tc.mark_complete(Status::Interesting, Some("value > 10"))
+                        .unwrap()
+                }
                 Ok(_) => tc.mark_complete(Status::Valid, None).unwrap(),
                 Err(Error::Stop(_)) => tc.mark_complete(Status::Overrun, None).unwrap(),
                 Err(error) => panic!("unexpected draw error: {error}"),
@@ -760,17 +817,34 @@ mod tests {
         }
         let result = run.result().unwrap();
         assert_eq!(result.failure_count().unwrap(), 1);
+        let failure = result.failure(0).unwrap();
+        assert_eq!(failure.origin().unwrap(), "value > 10");
+        assert_eq!(failure.caveat().unwrap(), None);
+        assert_eq!(
+            captured,
+            Some(11),
+            "the stamped execution is the shrunk one"
+        );
 
-        // Replaying the blob is the only way a frontend can observe the shrunk
-        // example, so assert the engine reached the smallest failing value
-        // rather than merely that it failed somewhere.
-        let blob = result
-            .failure(0)
-            .unwrap()
+        // The blob replays to the same example through a replaying run, which
+        // reports it as that run's failure.
+        let blob = failure
             .reproduction_blob()
             .unwrap()
             .expect("a failure carries a reproduction blob");
-        let tc = settings.test_case_from_blob(&blob).unwrap();
-        assert_eq!(tc.integer(0, 100).unwrap(), 11);
+        let mut replay = settings.start_run_blob(&blob).unwrap();
+        let mut replayed = None;
+        while let Some(mut tc) = replay.next_test_case().unwrap() {
+            let value = tc.integer(0, 100).unwrap();
+            replayed = Some(value);
+            let status = if value > 10 {
+                Status::Interesting
+            } else {
+                Status::Valid
+            };
+            tc.mark_complete(status, Some("value > 10")).unwrap();
+        }
+        assert_eq!(replayed, Some(11));
+        assert_eq!(replay.result().unwrap().failure_count().unwrap(), 1);
     }
 }

@@ -262,7 +262,7 @@ fn demo() -> Result<()> {
             "--match-contract",
             "StatefulCounterTest",
             "--test-cases",
-            "100",
+            "300",
             "--show-statistics",
         ]),
     )?;

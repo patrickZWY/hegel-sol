@@ -1,5 +1,5 @@
 use hegel_sol::runner::run_project;
-use tests_integration::{examples, only, options};
+use tests_integration::{examples, only, options, status_name};
 
 /// The end-to-end contract of a property runner: find the bug, reduce it to the
 /// smallest input that still triggers it, and hand back something that replays.
@@ -45,4 +45,30 @@ fn replaying_a_blob_across_several_tests_is_refused() {
     .to_string();
 
     assert!(error.contains("single test"), "{error}");
+}
+
+/// A blob holds the choices of one example. When the test has changed so those
+/// choices no longer fit its draws, replaying it must say so rather than report
+/// whatever the fresh draws happened to produce, and must not call it a failure.
+#[test]
+fn a_blob_that_no_longer_reproduces_is_not_reported_as_a_failure() {
+    // CustomErrorTest draws nothing, so its blob is empty and the first draw of
+    // ERC20SpikeTest runs off the end of the recording.
+    let empty = run_project(&options(examples(), "CustomErrorTest")).unwrap();
+    let blob = only(&empty).blob.clone().expect("a failure carries a blob");
+
+    let replay = run_project(&hegel_sol::runner::Options {
+        reproduce: Some(blob.clone()),
+        ..options(examples(), "ERC20SpikeTest")
+    })
+    .unwrap();
+    let report = only(&replay);
+
+    assert!(
+        !replay.failed(),
+        "{:?}",
+        tests_integration::statuses(&replay)
+    );
+    assert_eq!(status_name(&report.status), "overrun");
+    assert_eq!(report.blob.as_deref(), Some(blob.as_str()));
 }

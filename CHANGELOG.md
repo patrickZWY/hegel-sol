@@ -20,7 +20,12 @@ will first ship.
   targets, events, and pools. It carries a protocol version the runner checks before
   running anything, so a stale copy is reported by name.
 - Failures report decoded custom errors, captured `console.log` output, notes, the
-  sender of each stateful call, and a project-relative Solidity source position.
+  sender of each stateful call, and a project-relative Solidity source position. A
+  stateful counterexample prints as `vm.prank` and handler calls with their arguments,
+  and the printed reproduce command selects the failing test and repeats the options
+  that shape its draws, so it pastes back unchanged. A failure that did not reproduce
+  on every replay carries the engine's caveat; a `--reproduce` blob the test has
+  outgrown is reported as `overrun` rather than as a pass.
 - Generation is guided by basic-block coverage; `--no-coverage-target` disables it.
   `--actors`, `--allow-rule-reverts`, `--max-array-len`, `--max-byte-len`, and the
   `--test-prefix`, `--rule-prefix`, and `--invariant-prefix` options tune a run.

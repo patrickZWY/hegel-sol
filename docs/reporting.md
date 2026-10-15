@@ -29,7 +29,11 @@ Each entry in `tests` always contains these fields:
 - `source`: `{ "path", "line", "column" }` for a mapped Solidity failure, or `null`.
   Paths are relative to the Foundry project root and positions are one-based.
 - `blob`: Hegel reproduction blob, or `null`.
-- `trace`: ordered generated draws and state-machine actions.
+- `caveat`: the engine's account of a failure that did not reproduce on every replay,
+  or `null` for one that always did.
+- `trace`: ordered generated draws and state-machine actions. A stateful step appears
+  as its `sender` entry when the run has several actors, its argument draws, and then a
+  `rule` entry naming the handler they were passed to.
 - `console`: ordered captured console messages.
 - `notes`: ordered text passed to `hegel.note`.
 - `duration_ms`: wall-clock duration for that test job.

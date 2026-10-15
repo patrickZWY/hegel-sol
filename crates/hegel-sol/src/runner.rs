@@ -157,6 +157,9 @@ pub struct TestReport {
     pub origin: Option<String>,
     pub source: Option<SourceLocation>,
     pub blob: Option<String>,
+    /// The engine's account of how reliably the failure reproduced, present only
+    /// when some replay did not fail. Deterministic failures carry none.
+    pub caveat: Option<String>,
     pub trace: Vec<Draw>,
     pub console: Vec<String>,
     pub notes: Vec<String>,
@@ -198,6 +201,7 @@ impl TestReport {
             origin,
             source: None,
             blob: None,
+            caveat: None,
             trace: Vec::new(),
             console: Vec::new(),
             notes: Vec::new(),
@@ -524,8 +528,15 @@ fn configured_settings(
     Ok(settings)
 }
 
-/// Drive one test through the engine: search, then replay each failure's blob to
-/// recover the values behind it.
+/// Drive one test through the engine and report what it found.
+///
+/// The engine hands back no values, only blobs. It does, however, re-execute
+/// every failure it is about to report and stamp that execution for capture, so
+/// the report is taken from the freshest stamped execution of each failure's
+/// origin rather than from a replay made after the run. A `--reproduce` run
+/// replays the blob through the engine the same way: a reproducing attempt is
+/// the run's failure, and a run without one means the blob no longer reproduces,
+/// in which case the last attempt's verdict is reported.
 fn drive(
     test_name: String,
     options: &Options,
@@ -534,17 +545,21 @@ fn drive(
     let ctx = HegelContext::new();
     let settings = configured_settings(&ctx, options, &test_name)?;
 
-    if let Some(blob) = &options.reproduce {
-        let mut tc = settings.test_case_from_blob(blob)?;
-        let execution = execute(&tc)?;
-        tc.mark_complete(execution.status, execution.origin.as_deref())?;
-        return Ok(vec![execution.report(test_name, Some(blob.clone()))]);
-    }
-
-    let mut run = settings.start_run()?;
+    let mut run = match &options.reproduce {
+        Some(blob) => settings.start_run_blob(blob)?,
+        None => settings.start_run()?,
+    };
+    let mut captured: BTreeMap<String, CaseExecution> = BTreeMap::new();
+    let mut last = None;
     while let Some(mut tc) = run.next_test_case()? {
+        let capture = tc.should_capture()?;
         let execution = execute(&tc)?;
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
+        if capture && execution.status == Status::Interesting {
+            captured.insert(execution.origin.clone().unwrap_or_default(), execution);
+        } else {
+            last = Some(execution);
+        }
     }
     let result = run.result()?;
     if let Some(error) = result.error()? {
@@ -554,22 +569,40 @@ fn drive(
     let mut reports = Vec::new();
     for index in 0..result.failure_count()? {
         let failure = result.failure(index)?;
-        let blob = failure.reproduction_blob()?;
-        let Some(blob_value) = blob.as_deref() else {
-            reports.push(TestReport::empty(
-                test_name.clone(),
-                TestStatus::Failed,
-                Some(failure.origin()?),
-            ));
-            continue;
+        let origin = failure.origin()?;
+        // A replaying run reports no blob because the caller already holds it.
+        let blob = failure
+            .reproduction_blob()?
+            .or_else(|| options.reproduce.clone());
+        let caveat = failure.caveat()?;
+        let execution = match captured.remove(&origin) {
+            Some(execution) => execution,
+            None => match blob.as_deref() {
+                // The engine promises a stamped execution for every failure it
+                // reports; replaying the blob is the fallback if that ever lapses.
+                Some(blob) => {
+                    let mut tc = settings.test_case_from_blob(blob)?;
+                    let execution = execute(&tc)?;
+                    tc.mark_complete(execution.status, execution.origin.as_deref())?;
+                    execution
+                }
+                None => {
+                    reports.push(TestReport::empty(
+                        test_name.clone(),
+                        TestStatus::Failed,
+                        Some(origin),
+                    ));
+                    continue;
+                }
+            },
         };
-        let mut tc = settings.test_case_from_blob(blob_value)?;
-        let execution = execute(&tc)?;
-        tc.mark_complete(execution.status, execution.origin.as_deref())?;
-        reports.push(execution.report(test_name.clone(), blob));
+        reports.push(execution.report(test_name.clone(), blob, caveat));
     }
     if reports.is_empty() {
-        reports.push(TestReport::empty(test_name, TestStatus::Passed, None));
+        reports.push(match (options.reproduce.as_ref(), last) {
+            (Some(blob), Some(execution)) => execution.report(test_name, Some(blob.clone()), None),
+            _ => TestReport::empty(test_name, TestStatus::Passed, None),
+        });
     }
     Ok(reports)
 }
@@ -595,7 +628,7 @@ struct CaseExecution {
 }
 
 impl CaseExecution {
-    fn report(self, test: String, blob: Option<String>) -> TestReport {
+    fn report(self, test: String, blob: Option<String>, caveat: Option<String>) -> TestReport {
         TestReport {
             test,
             console: self.console,
@@ -604,6 +637,7 @@ impl CaseExecution {
             origin: self.origin,
             source: self.source,
             blob,
+            caveat,
             trace: self.trace,
             duration_ms: 0,
         }
@@ -958,11 +992,9 @@ fn execute_stateful_case(
                     return machine.finish(status, None, None);
                 }
             };
-            machine.trace.push(Draw {
-                name: function.name.clone(),
-                kind: "rule".into(),
-                value: "()".into(),
-            });
+            // A step is traced as its sender, its arguments, and then the
+            // handler they fed, so a reader of the trace can close each call
+            // without knowing how many arguments the handler takes.
             if actors.len() > 1 {
                 machine.trace.push(Draw {
                     name: "sender".into(),
@@ -971,6 +1003,11 @@ fn execute_stateful_case(
                 });
             }
             machine.trace.extend(drawn);
+            machine.trace.push(Draw {
+                name: function.name.clone(),
+                kind: "rule".into(),
+                value: "()".into(),
+            });
 
             machine.inspector.outcome = None;
             let result = machine.call(caller, calldata)?;

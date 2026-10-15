@@ -6,8 +6,11 @@ use tests_integration::{behaviour, examples, only, options, rules, status_name};
 /// is reported as the long sequence.
 #[test]
 fn a_stateful_bug_shrinks_to_the_two_calls_that_cause_it() {
+    // A burn of exactly one is a narrow target for a random handler sequence,
+    // so the budget is generous enough that a reshuffle of the engine's
+    // generator still reaches it under the pinned seed.
     let execution = run_project(&Options {
-        test_cases: 100,
+        test_cases: 300,
         ..options(examples(), "StatefulCounterTest")
     })
     .unwrap();

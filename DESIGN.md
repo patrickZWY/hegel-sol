@@ -48,12 +48,15 @@ boundaries isolate them:
 `discovery::Conventions` holds the name prefixes that decide what a test is, so the
 convention is a value rather than scattered literals.
 
-## Engine facts (hegel-rust repo, `hegel-c/include/hegel.h`, 2686 lines)
+## Engine facts (hegel-rust repo, `hegel-c/include/hegel.h`, 3132 lines)
 
-- Engine is pure Rust: crate `hegeltest-c` 0.42.3 (lib name `hegel_c`, crate-type
-  cdylib + staticlib + rlib). Depending on it as an rlib gives direct `hegel_c::hegel_*`
-  functions, no dlopen needed. This is what `hegeltest`'s `static-engine` feature does.
-- The high-level `hegeltest` crate 0.45.4 is NOT sufficient: its big-integer path is
+Gathered against 0.42.3 on 2026-09-15 and revised against 0.45.13 on 2026-10-15.
+
+- Engine is pure Rust: crate `hegeltest-c` 0.45.13 (lib name `hegel_c`, crate-type
+  cdylib + staticlib + rlib), pinned exactly because the C ABI changes between minor
+  releases. Depending on it as an rlib gives direct `hegel_c::hegel_*` functions, no
+  dlopen needed. This is what `hegeltest`'s `static-engine` feature does.
+- The high-level `hegeltest` crate is NOT sufficient: its big-integer path is
   `pub(crate)` and capped at 17 bytes (u128). Bind the C ABI directly.
 - `hegel_generate_integer_big(ctx, tc, min, min_len, max, max_len, out, out_cap, out_len)`
   takes two's-complement little-endian signed byte buffers. For uint256 pass 33-byte
@@ -73,15 +76,25 @@ convention is a value rather than scattered literals.
   the revert selector / assertion location) -> `hegel_test_case_free` ->
   `hegel_run_result` -> `hegel_run_result_status`, `failure_count`, `failure(i)` ->
   `hegel_failure_reproduction_blob`, `hegel_failure_origin`.
-- Minimal example printing: the engine does not hand back values. Replay the blob with
-  `hegel_test_case_from_blob(ctx, settings, blob, cb, ud, &tc)`, rerun the EVM test
-  recording every draw, print the trace and revert reason. This is what hegeltest does.
+- Minimal example printing: the engine does not hand back values. Before the run
+  concludes it re-executes every failure it will report and stamps that case through
+  `hegel_test_case_should_capture`; the frontend keeps the stamped execution's draws
+  and output per origin and reports from the freshest one. `hegel_failure_caveat` is
+  non-null when some replay of the failure did not fail. Replaying a blob afterwards
+  with `hegel_test_case_from_blob` still works but is the fallback, not the design.
+- Reproduce: `hegel_run_start_blob(ctx, settings, blob, cb, ud, &run)` is driven like
+  an exploring run. It retries a deterministic blob up to four times, reports a
+  reproducing attempt as the run's one failure without a blob, and reports no failure
+  when the test's draws leave the recording, which the frontend sees as the draw
+  returning `HEGEL_E_STOP_TEST`.
+- Engine output goes to stderr when the output callback is NULL, which keeps `--json`
+  on stdout clean.
 - Spans: `hegel_label_from_name`, `hegel_start_span(ctx, tc, label)`,
   `hegel_stop_span(ctx, tc, discard)`. Wrap each handler call in stateful tests so the
   shrinker can delete whole calls.
-- Stateful: `hegel_new_state_machine(ctx, tc, rule_names, rule_groups, n_rules,
-  invariant_names, invariant_always_check, n_inv, min_conc=1, max_conc=1, step_count=50,
-  &sm, &conc)` then rounds of `hegel_state_machine_next_group` /
+- Stateful: `hegel_new_state_machine(ctx, tc, rule_names, rule_groups, rule_weights,
+  n_rules, invariant_names, invariant_always_check, n_inv, min_conc=1, max_conc=1,
+  step_count=50, &sm, &conc)` then rounds of `hegel_state_machine_next_group` /
   `hegel_state_machine_next_rule(worker=0)` / `hegel_state_machine_rule_rejected` /
   `hegel_state_machine_should_check_invariant`. Pools: `hegel_new_pool`, `hegel_pool_add`,
   `hegel_pool_generate(consume)` for addresses and ids created at runtime.
@@ -283,6 +296,29 @@ records initial results and remaining measurement gaps.
 [openzeppelin]: https://github.com/OpenZeppelin/openzeppelin-contracts
 [solady]: https://github.com/Vectorized/solady
 [uniswap]: https://github.com/Uniswap/v2-core
+
+### 2026-10-15: engine 0.45 and the report's provenance
+
+The engine moved from 0.42.3 to 0.45.13. Two ABI changes mattered.
+`hegel_new_state_machine` gained per-rule weights, which the runner leaves null. More
+consequentially, the engine now re-executes every failure before the run concludes and
+stamps that execution for capture, so the runner reports from the stamped execution
+instead of replaying the blob after the run. The report therefore describes an execution
+the engine itself observed fail, and a failure some replay did not reproduce carries the
+engine's `caveat` in the report. `--reproduce` drives `hegel_run_start_blob` the same way,
+so a blob whose choices no longer fit the test is reported as `overrun` with the engine's
+explanation on stderr rather than as a fresh search that happened to pass.
+
+Two reporting corrections shipped with it. The printed reproduce command used to omit
+the selection, yet a blob is refused unless exactly one test is selected; it now names
+the test and repeats every option that shapes draws. A stateful step is traced as its
+sender, its arguments, and then the handler, so the counterexample prints as a
+`vm.prank` followed by a handler call with its arguments, which is pasteable.
+
+Generation changed between the two engine versions, so the stateful demo's seed no
+longer reached its bug in 100 cases. Across twenty seeds the two engines find it at the
+same rate (15 and 14 of 20), so the demo and its test spend 300 cases instead of
+choosing a seed that happens to work.
 
 ## Deferred work
 

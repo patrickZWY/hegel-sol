@@ -7,7 +7,8 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use hegel_sol::{
-    discovery::Conventions,
+    discovery::{Conventions, STATEFUL_SUFFIX},
+    inspector::Draw,
     runner::{Options, Shard, TestReport, TestStatus, list_project, run_project},
 };
 use serde::Serialize;
@@ -174,16 +175,17 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
     };
     let reproduce = args
         .reproduce
+        .clone()
         .or_else(|| env::var("HEGEL_SOL_REPRODUCE").ok());
     let options = Options {
-        root: args.root,
-        match_contract: args.match_contract,
-        match_test: args.match_test,
+        root: args.root.clone(),
+        match_contract: args.match_contract.clone(),
+        match_test: args.match_test.clone(),
         test_cases: args.test_cases,
         seed: args.seed,
         database,
         step_count: args.step_count,
-        profile: args.profile,
+        profile: args.profile.clone(),
         reproduce,
         phases: args.phases,
         verbosity: args.verbosity.ffi(),
@@ -196,9 +198,9 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         allow_rule_reverts: args.allow_rule_reverts,
         coverage_target: !args.no_coverage_target,
         conventions: Conventions {
-            test: args.test_prefix,
-            rule: args.rule_prefix,
-            invariant: args.invariant_prefix,
+            test: args.test_prefix.clone(),
+            rule: args.rule_prefix.clone(),
+            invariant: args.invariant_prefix.clone(),
             ..Conventions::default()
         },
     };
@@ -230,7 +232,7 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         for warning in &execution.warnings {
             eprintln!("warning: {warning}");
         }
-        print_reports(&execution.reports, args.show_statistics, args.show_timings);
+        print_reports(&execution.reports, &args);
         print_summary(&execution.reports, elapsed_ms);
     }
     Ok(execution.failed())
@@ -245,9 +247,9 @@ fn resolve_database(root: &Path, value: &str) -> String {
     }
 }
 
-fn print_reports(reports: &[TestReport], show_statistics: bool, show_timings: bool) {
+fn print_reports(reports: &[TestReport], args: &TestArgs) {
     for report in reports {
-        let timing = if show_timings {
+        let timing = if args.show_timings {
             format!(" ({} ms)", report.duration_ms)
         } else {
             String::new()
@@ -264,6 +266,9 @@ fn print_reports(reports: &[TestReport], show_statistics: bool, show_timings: bo
                 if let Some(source) = &report.source {
                     println!("  at {}:{}:{}", source.path, source.line, source.column);
                 }
+                if let Some(caveat) = &report.caveat {
+                    println!("  caveat: {caveat}");
+                }
                 print_counterexample(report);
                 for line in &report.console {
                     println!("  {line}");
@@ -271,31 +276,115 @@ fn print_reports(reports: &[TestReport], show_statistics: bool, show_timings: bo
                 for note in &report.notes {
                     println!("  note: {note}");
                 }
-                if show_statistics {
+                if args.show_statistics {
                     print_statistics(report);
                 }
                 if let Some(blob) = &report.blob {
-                    println!("  reproduce: HEGEL_SOL_REPRODUCE={blob} hegel-sol test");
+                    println!("  reproduce: {}", reproduce_command(args, report, blob));
                 }
             }
         }
     }
 }
 
+/// The command that replays a reported failure.
+///
+/// A blob only means something to the test that produced it, under the options
+/// that shaped its draws, so the command selects exactly that test and repeats
+/// every option that changes what a test draws. Options that only affect the
+/// search, such as the seed or the case budget, are left out.
+fn reproduce_command(args: &TestArgs, report: &TestReport, blob: &str) -> String {
+    let mut command = vec![
+        format!("HEGEL_SOL_REPRODUCE={blob}"),
+        "hegel-sol".to_owned(),
+        "test".to_owned(),
+    ];
+    let mut push = |flag: &str, value: &str| {
+        command.push(format!("--{flag}"));
+        command.push(shell_quote(value));
+    };
+    if args.root != Path::new(".") {
+        push("root", &args.root.to_string_lossy());
+    }
+    let (contract, function) = report
+        .test
+        .split_once('.')
+        .unwrap_or((report.test.as_str(), STATEFUL_SUFFIX));
+    push("match-contract", contract);
+    push("match-test", function);
+    let defaults = Options::default();
+    if args.step_count != defaults.step_count {
+        push("step-count", &args.step_count.to_string());
+    }
+    if args.actors != defaults.actors {
+        push("actors", &args.actors.to_string());
+    }
+    if args.max_array_len != defaults.max_array_len {
+        push("max-array-len", &args.max_array_len.to_string());
+    }
+    if args.max_byte_len != defaults.max_byte_len {
+        push("max-byte-len", &args.max_byte_len.to_string());
+    }
+    if args.test_prefix != defaults.conventions.test {
+        push("test-prefix", &args.test_prefix);
+    }
+    if args.rule_prefix != defaults.conventions.rule {
+        push("rule-prefix", &args.rule_prefix);
+    }
+    if args.invariant_prefix != defaults.conventions.invariant {
+        push("invariant-prefix", &args.invariant_prefix);
+    }
+    if args.allow_rule_reverts {
+        command.push("--allow-rule-reverts".to_owned());
+    }
+    command.join(" ")
+}
+
+/// Quote a value for a POSIX shell when it needs it, so the printed command
+/// pastes back unchanged.
+fn shell_quote(value: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c);
+    if !value.is_empty() && value.chars().all(plain) {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
 /// Print the minimal example as something close to the Solidity that produced
 /// it, so a counterexample can be pasted into a test.
+///
+/// A stateful step is traced as its sender, its arguments, and then the handler
+/// they fed, so the handler line closes the call with the arguments gathered
+/// since the previous one. Draws that no handler consumed, which is every draw
+/// of a stateless test, are printed as declarations.
 fn print_counterexample(report: &TestReport) {
     if report.trace.is_empty() {
         return;
     }
     println!("  minimal counterexample:");
+    let mut sender = None;
+    let mut pending: Vec<&Draw> = Vec::new();
     for draw in &report.trace {
         match draw.kind.as_str() {
-            "rule" => println!("    {}();", draw.name),
-            "sender" => println!("    vm.prank({});", draw.value),
             "event" => {}
-            kind => println!("    {kind} {} = {};", draw.name, draw.value),
+            "sender" => sender = Some(draw.value.as_str()),
+            "rule" => {
+                if let Some(sender) = sender.take() {
+                    println!("    vm.prank({sender});");
+                }
+                let arguments = pending
+                    .drain(..)
+                    .map(|draw| draw.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("    {}({arguments});", draw.name);
+            }
+            _ => pending.push(draw),
         }
+    }
+    for draw in pending {
+        println!("    {} {} = {};", draw.kind, draw.name, draw.value);
     }
 }
 
@@ -388,7 +477,7 @@ fn parse_jobs(value: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hegel_sol::{inspector::Draw, sourcemap::SourceLocation};
+    use hegel_sol::sourcemap::SourceLocation;
 
     fn populated_report() -> TestReport {
         TestReport {
@@ -401,6 +490,7 @@ mod tests {
                 column: 9,
             }),
             blob: Some("blob".into()),
+            caveat: None,
             trace: vec![Draw {
                 name: "amount".into(),
                 kind: "uint256".into(),
@@ -441,6 +531,7 @@ mod tests {
             "origin",
             "source",
             "blob",
+            "caveat",
             "trace",
             "console",
             "notes",
@@ -485,7 +576,59 @@ mod tests {
         assert!(test["origin"].is_null());
         assert!(test["source"].is_null());
         assert!(test["blob"].is_null());
+        assert!(test["caveat"].is_null());
         assert!(test["trace"].is_array());
+    }
+
+    fn args(extra: &[&str]) -> TestArgs {
+        let Cli {
+            command: Command::Test(args),
+        } = Cli::parse_from(
+            ["hegel-sol", "test"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        );
+        args
+    }
+
+    #[test]
+    fn the_printed_reproduce_command_selects_the_one_test_the_blob_belongs_to() {
+        // A blob is refused unless exactly one test is selected, so a printed
+        // command that leaves the selection out fails in any project with more
+        // than one test.
+        let command = reproduce_command(&args(&[]), &populated_report(), "blob");
+        assert_eq!(
+            command,
+            "HEGEL_SOL_REPRODUCE=blob hegel-sol test --match-contract Example --match-test \
+             test_thing"
+        );
+
+        let stateful = TestReport {
+            test: "Counter.stateful".into(),
+            ..populated_report()
+        };
+        let command = reproduce_command(&args(&[]), &stateful, "blob");
+        assert!(command.ends_with("--match-contract Counter --match-test stateful"));
+    }
+
+    #[test]
+    fn the_printed_reproduce_command_repeats_the_options_that_shape_draws() {
+        // Replaying under different actor counts or lengths changes the draw
+        // bounds, so the blob would overrun instead of reproducing.
+        let args = args(&[
+            "--root",
+            "my project",
+            "--actors",
+            "5",
+            "--allow-rule-reverts",
+            "--seed",
+            "7",
+        ]);
+        let command = reproduce_command(&args, &populated_report(), "blob");
+        assert!(command.contains("--root 'my project'"), "{command}");
+        assert!(command.contains("--actors 5"), "{command}");
+        assert!(command.contains("--allow-rule-reverts"), "{command}");
+        assert!(!command.contains("--seed"), "{command}");
     }
 
     #[test]
