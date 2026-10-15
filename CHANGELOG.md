@@ -3,7 +3,7 @@
 User-visible changes, described against the latest release rather than commit by
 commit.
 
-## Unreleased
+## 0.2.0 - 2026-10-15
 
 ### Features
 
