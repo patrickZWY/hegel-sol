@@ -20,7 +20,7 @@ alloy-json-abi = "1.7"
 alloy-dyn-abi = "1.7"
 alloy-primitives = "1.7"
 # Already in the tree through revm's precompiles; used for vm.sign and vm.addr.
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 
 # CLI, serialisation, errors
 anyhow = "1"
