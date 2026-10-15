@@ -9,8 +9,8 @@
 /solidity/cache
 /examples/out
 /examples/cache
-/benchmarks/out
-/benchmarks/cache
+/crates/xtask/benchmarks/out
+/crates/xtask/benchmarks/cache
 /crates/tests-integration/projects/*/out
 /crates/tests-integration/projects/*/cache
 /crates/tests-integration/projects/*/*/out

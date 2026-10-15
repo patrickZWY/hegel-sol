@@ -111,7 +111,7 @@ hegel-sol in CI; the [validation record][real-world] has the results.
 ## More
 
 - [`CHANGELOG.md`](CHANGELOG.md): what changed for users in each release.
-- [`DESIGN.md`](DESIGN.md): how the runner is built and why.
+- [`docs/design.md`](docs/design.md): how the runner is built and why.
 - [`AGENTS.md`](AGENTS.md): conventions, workflows, and how to release.
 
 [releases]: https://github.com/patrickZWY/hegel-sol/releases/latest

@@ -19,7 +19,7 @@ cargo x profile         # wall time, CPU time, and peak memory for one real work
 ```
 
 CI runs the first three on every push and pull request, and the committed pre-push hook
-runs the same; enable it with `git config core.hooksPath .githooks`. Foundry projects
+runs the same; enable it with `git config core.hooksPath .github/hooks`. Foundry projects
 are discovered by their `foundry.toml`, so a new one needs no registration.
 
 Two versions are pinned by hand. The Rust MSRV is `rust-version` in `Cargo.toml` and the
@@ -30,18 +30,18 @@ first matrix entry in `.github/workflows/ci.yml`; the Foundry release is `versio
 
 Every top-level directory serves one audience, and that decides where a new file goes.
 
-- `crates/hegel-sol` is the runner. Keep the layering described in `DESIGN.md`: the
+- `crates/hegel-sol` is the runner. Keep the layering described in `docs/design.md`: the
   engine FFI under the EVM host, under the Foundry and solc adapters, under the runner.
 - `solidity/` holds `Hegel.sol`, the file test projects import. Bump
   `HEGEL_PROTOCOL_VERSION` there and `PROTOCOL_VERSION` in `protocol.rs` together
   whenever a selector or the meaning behind one changes.
 - `examples/` holds contracts a reader is meant to study. Every test in it runs end to
   end, and the integration tests pin the counterexamples the README promises.
-- `benchmarks/` holds workloads for `cargo x bench`. They are never tests.
 - `crates/tests-integration/projects/behaviour` holds one contract per runner behaviour;
   each runs to completion. `projects/broken` holds projects the runner must refuse.
-- `crates/xtask` holds the workflows. `docs/` holds reference material that is a
-  contract with users, such as the JSON report schema.
+- `crates/xtask` holds the workflows, and `crates/xtask/benchmarks` the workloads for
+  `cargo x bench`, which are never tests. `docs/` holds the design document and
+  reference material that is a contract with users, such as the JSON report schema.
 
 ## Tests
 
@@ -60,7 +60,7 @@ messages name the file or option the reader should change.
 ## Documentation
 
 - `README.md`: what the runner does and how to use it. Keep it an entry point.
-- `DESIGN.md`: architecture, the engine and revm API facts the code relies on, and a
+- `docs/design.md`: architecture, the engine and revm API facts the code relies on, and a
   dated decision log. Append an entry when a decision is made or reversed rather than
   rewriting history.
 - `docs/reporting.md`: the JSON contract. A change to it follows the versioning rules it

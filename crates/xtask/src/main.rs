@@ -48,7 +48,7 @@ enum Cmd {
     Test(Test),
     /// Run the deterministic feature demo against the showcase project.
     Demo,
-    /// Run the release-mode scaling workloads in `benchmarks/`.
+    /// Run the release-mode scaling workloads in `crates/xtask/benchmarks/`.
     Bench(Bench),
     /// Check pinned real-contract properties with Forge and hegel-sol.
     Validate(Validate),
@@ -294,7 +294,7 @@ fn bench(args: Bench) -> Result<()> {
         &runner,
         [
             "--root",
-            "benchmarks",
+            "crates/xtask/benchmarks",
             "--match-contract",
             "BenchmarkCollectionsTest",
             "--test-cases",
@@ -316,7 +316,7 @@ fn bench(args: Bench) -> Result<()> {
         &runner,
         [
             "--root",
-            "benchmarks",
+            "crates/xtask/benchmarks",
             "--match-contract",
             "BenchmarkStatefulTest",
             "--test-cases",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The same three commands CI runs. Enable with: git config core.hooksPath .githooks
+# The same three commands CI runs. Enable with: git config core.hooksPath .github/hooks
 set -euo pipefail
 
 echo "Running the required hegel-sol checks before push..."

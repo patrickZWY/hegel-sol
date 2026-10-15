@@ -195,7 +195,7 @@ gained a versioned envelope; `docs/reporting.md` states the compatibility rules.
 
 A benchmark that ran as a test was removed: it asserted only that large workloads
 "passed", with Solidity assertions that mirrored the CLI flags the test itself passed.
-Workloads live in `benchmarks/` and are driven by `cargo x bench`.
+Workloads live in `crates/xtask/benchmarks/` and are driven by `cargo x bench`.
 
 ### 2026-09-19: decoupling and search quality
 
@@ -242,11 +242,14 @@ default named a directory of this repository.
 
 ### 2026-09-29: validation before the first release
 
-The synthetic workloads in [`benchmarks/`](benchmarks/) measure scaling, but they do
-not establish compatibility or bug-finding value on real contracts. The first release
-needs a repeatable comparison on pinned third-party code. The plan below guides that
-work; the [first ecosystem pass](crates/tests-integration/projects/real-world/README.md)
-records initial results and remaining measurement gaps.
+The synthetic workloads in [`crates/xtask/benchmarks/`][benchmarks] measure scaling,
+but they do not establish compatibility or bug-finding value on real contracts. The
+first release needs a repeatable comparison on pinned third-party code. The plan below
+guides that work; the [first ecosystem pass][first-pass] records initial results and
+remaining measurement gaps.
+
+[benchmarks]: ../crates/xtask/benchmarks/
+[first-pass]: ../crates/tests-integration/projects/real-world/README.md
 
 1. **Make runs reproducible.** Record the runner commit, upstream commit, solc and
    Foundry versions, Rust version, machine CPU and memory, exact command, seed, case
@@ -319,6 +322,11 @@ Generation changed between the two engine versions, so the stateful demo's seed 
 longer reached its bug in 100 cases. Across twenty seeds the two engines find it at the
 same rate (15 and 14 of 20), so the demo and its test spend 300 cases instead of
 choosing a seed that happens to work.
+
+The repository root was thinned at the same time. `DESIGN.md` became `docs/design.md`,
+`benchmarks/` moved under `crates/xtask/` next to the command that drives it, and the
+pre-push hook moved under `.github/hooks/`. Each top-level directory still serves one
+audience; the three that moved serve the maintainer, who already lives in those trees.
 
 ## Deferred work
 
