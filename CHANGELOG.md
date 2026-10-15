@@ -1,10 +1,11 @@
 # Changelog
 
 User-visible changes, described against the latest release rather than commit by
-commit. Nothing has been released yet, so the section below describes the runner as it
-will first ship.
+commit.
 
-## Unreleased
+## 0.1.0 - 2026-10-15
+
+First release.
 
 ### Features
 
