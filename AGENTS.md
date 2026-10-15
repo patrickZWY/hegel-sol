@@ -6,11 +6,21 @@ this file is the maintainer's.
 ## Workflows
 
 Use `cargo x` for every build, test, lint, and formatting command, and read
-`cargo x --help` and the subcommand's `--help` before running one. CI and the pre-push
-hook run `cargo x lint`, `cargo x build --locked`, and `cargo x test`, so a change that
-passes those locally passes CI. `cargo x lint --fix` applies formatting and lint fixes.
-Foundry projects are discovered by their `foundry.toml`, so a new one needs no
-registration.
+`cargo x --help` and the subcommand's `--help` before running one.
+
+```sh
+cargo x lint            # rustfmt, clippy, forge fmt, typos; --fix applies fixes
+cargo x build --locked  # every crate and every Foundry project
+cargo x test            # unit, integration, and pinned real-contract tests
+cargo x demo            # three intentional failures, found and shrunk
+cargo x bench           # release-mode scaling workloads
+cargo x validate        # pinned real-contract properties under Forge and hegel-sol
+cargo x profile         # wall time, CPU time, and peak memory for one real workload
+```
+
+CI runs the first three on every push and pull request, and the committed pre-push hook
+runs the same; enable it with `git config core.hooksPath .githooks`. Foundry projects
+are discovered by their `foundry.toml`, so a new one needs no registration.
 
 Two versions are pinned by hand. The Rust MSRV is `rust-version` in `Cargo.toml` and the
 first matrix entry in `.github/workflows/ci.yml`; the Foundry release is `version` in
@@ -68,6 +78,13 @@ report-schema changes, compatibility changes, and meaningful performance improve
 Exclude tests, refactors, documentation, CI, and tooling unless they change observable
 behaviour. Write each entry from the user's perspective, with migration guidance for a
 breaking change.
+
+## Releasing
+
+Turn the changelog's pending section into `## X.Y.Z - date`, set `version` in
+`Cargo.toml`, and commit. Once CI on `main` is green, push a `vX.Y.Z` tag. The release
+workflow reruns the checks, builds a Linux binary, and publishes it with a checksum as a
+GitHub release.
 
 ## Commits and pull requests
 
