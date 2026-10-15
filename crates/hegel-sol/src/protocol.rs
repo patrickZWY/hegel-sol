@@ -62,8 +62,11 @@ pub enum VmOp {
     Roll,
     ExpectRevertAny,
     ExpectRevertData,
+    ExpectEmit,
     Label,
     Assume,
+    Addr,
+    Sign,
 }
 
 struct Spec<T: 'static> {
@@ -259,6 +262,20 @@ static VM_SPECS: &[Spec<VmOp>] = &[
         "(bytes4)",
         false
     ),
+    spec!(VmOp::ExpectEmit, "expectEmit()", "()", false),
+    spec!(VmOp::ExpectEmit, "expectEmit(address)", "(address)", false),
+    spec!(
+        VmOp::ExpectEmit,
+        "expectEmit(bool,bool,bool,bool)",
+        "(bool,bool,bool,bool)",
+        false
+    ),
+    spec!(
+        VmOp::ExpectEmit,
+        "expectEmit(bool,bool,bool,bool,address)",
+        "(bool,bool,bool,bool,address)",
+        false
+    ),
     spec!(
         VmOp::Label,
         "label(address,string)",
@@ -266,6 +283,13 @@ static VM_SPECS: &[Spec<VmOp>] = &[
         false
     ),
     spec!(VmOp::Assume, "assume(bool)", "(bool)", false),
+    spec!(VmOp::Addr, "addr(uint256)", "(uint256)", false),
+    spec!(
+        VmOp::Sign,
+        "sign(uint256,bytes32)",
+        "(uint256,bytes32)",
+        false
+    ),
 ];
 
 static HEGEL_TABLE: LazyLock<HashMap<[u8; 4], Call<Op>>> = LazyLock::new(|| table(HEGEL_SPECS));

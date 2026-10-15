@@ -1,0 +1,18 @@
+# Solady at the revision named in ../README.md: its ERC20 and its own test suite
+# for it, unchanged, plus the SoladyERC20 harness. The compiler settings follow
+# upstream so the suite's code-size test sees the same bytecode.
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+solc_version = "0.8.30"
+evm_version = "paris"
+optimizer = true
+optimizer_runs = 1_000
+gas_limit = 100_000_000
+ignored_error_codes = [2424, 8429, 4591]
+remappings = ["forge-std=test/utils/forge-std/"]
+
+[fmt]
+line_length = 100
+ignore = ["src/**", "test/ERC20.t.sol", "test/utils/**"]

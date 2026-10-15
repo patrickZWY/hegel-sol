@@ -1589,6 +1589,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hegeltest-c",
+ "k256",
  "revm",
  "serde",
  "serde_json",

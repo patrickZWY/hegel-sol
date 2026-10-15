@@ -64,6 +64,44 @@ fn join(values: &[DynSolValue]) -> String {
         .join(", ")
 }
 
+/// Render revert data the way a Solidity caller would read it.
+pub fn decode_revert(output: &[u8]) -> String {
+    if output.len() >= 4
+        && output[..4] == alloy_primitives::keccak256("Error(string)")[..4]
+        && let Some(message) = decode_abi_string(&output[4..])
+    {
+        return format!("revert: {message}");
+    }
+    if output.len() >= 36 && output[..4] == alloy_primitives::keccak256("Panic(uint256)")[..4] {
+        return format!(
+            "panic code 0x{:x}",
+            alloy_primitives::U256::from_be_slice(&output[4..36])
+        );
+    }
+    if output.len() >= 4 {
+        format!(
+            "revert selector 0x{}",
+            alloy_primitives::hex::encode(&output[..4])
+        )
+    } else {
+        "revert with no data".into()
+    }
+}
+
+fn decode_abi_string(args: &[u8]) -> Option<String> {
+    if args.len() < 64 {
+        return None;
+    }
+    let offset = usize::try_from(alloy_primitives::U256::from_be_slice(&args[..32])).ok()?;
+    let len_end = offset.checked_add(32)?;
+    let len = usize::try_from(alloy_primitives::U256::from_be_slice(
+        args.get(offset..len_end)?,
+    ))
+    .ok()?;
+    let end = len_end.checked_add(len)?;
+    Some(String::from_utf8_lossy(args.get(len_end..end)?).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

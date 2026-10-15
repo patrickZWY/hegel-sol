@@ -1,5 +1,5 @@
-use hegel_sol::runner::{Options, run_project};
-use tests_integration::{examples, only, options};
+use hegel_sol::runner::{Options, list_project, run_project};
+use tests_integration::{behaviour, examples, only, options, statuses};
 
 /// Unmodified forge-std tests reach the runner through Foundry's cheatcode
 /// address, so the emulated subset has to behave as those tests expect.
@@ -57,4 +57,78 @@ fn a_failure_is_reported_with_its_decoded_error_and_source_line() {
         source.path,
         source.line
     );
+}
+
+/// Forge suites decode the return value of a call they expected to revert, so a
+/// matched expectation has to hand back data that decodes.
+#[test]
+fn a_matched_expected_revert_leaves_the_return_value_decodable() {
+    let execution = run_project(&Options {
+        test_cases: 1,
+        ..options(behaviour(), "ExpectRevertReturnTest")
+    })
+    .unwrap();
+
+    assert!(!execution.failed(), "{:?}", statuses(&execution));
+}
+
+#[test]
+fn expected_events_pass_when_emitted_and_fail_the_example_when_not() {
+    let execution = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "ExpectEmitTest")
+    })
+    .unwrap();
+
+    assert_eq!(
+        statuses(&execution),
+        [
+            ("ExpectEmitTest.test_matching_event_passes", "passed"),
+            ("ExpectEmitTest.test_missing_event_fails", "failed"),
+            ("ExpectEmitTest.test_unchecked_topics_are_ignored", "passed"),
+        ]
+    );
+    let failed = &execution.reports[1];
+    assert!(
+        failed
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.contains("was not emitted")),
+        "{:?}",
+        failed.origin
+    );
+}
+
+/// Permit-style tests sign with a generated key and expect the contract's
+/// `ecrecover` to agree with `vm.addr`.
+#[test]
+fn signatures_recover_to_the_address_derived_from_the_key() {
+    let execution = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "SigningTest")
+    })
+    .unwrap();
+
+    assert!(!execution.failed(), "{:?}", statuses(&execution));
+}
+
+/// A fixed test and its fuzzed overload would otherwise share a name in reports,
+/// in the example database, and in a replay.
+#[test]
+fn overloaded_tests_are_named_by_their_signatures() {
+    let listed = list_project(&options(behaviour(), "OverloadedTest")).unwrap();
+    assert_eq!(
+        listed,
+        [
+            "OverloadedTest.test_same()",
+            "OverloadedTest.test_same(uint8)"
+        ]
+    );
+
+    let narrowed = list_project(&Options {
+        match_test: Some("test_same(uint8)".into()),
+        ..options(behaviour(), "OverloadedTest")
+    })
+    .unwrap();
+    assert_eq!(narrowed, ["OverloadedTest.test_same(uint8)"]);
 }

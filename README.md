@@ -103,10 +103,12 @@ the basic blocks each example reaches; `--no-coverage-target` turns that off.
 ## Foundry compatibility
 
 Supported cheatcodes: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`,
-`expectRevert`, `label`, and `assume`. `console.log` output and custom errors are
-decoded. Forked state is not supported: this is a standalone runner, not a Foundry fork.
-Pinned OpenZeppelin, Solady, and Uniswap v2 properties run under both Forge and
-hegel-sol in CI; the [validation record][real-world] has the results.
+`expectRevert`, `expectEmit`, `label`, `assume`, `addr`, and `sign`. `console.log`
+output and custom errors are decoded, and test contracts are exempt from the code-size
+limit as in Forge. Forked state and Forge's target-contract invariant style are not
+supported: this is a standalone runner, not a Foundry fork. Solady's own ERC20 suite and
+pinned OpenZeppelin, Solady, and Uniswap v2 properties run under both Forge and hegel-sol
+in CI; the [validation record][real-world] has the results.
 
 ## More
 

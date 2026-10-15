@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ERC20} from "../lib/solady/src/tokens/ERC20.sol";
+import {ERC20} from "../src/tokens/ERC20.sol";
 
 interface Vm {
     function prank(address sender) external;
@@ -86,7 +86,10 @@ contract SoladyERC20StatefulTest {
     }
 
     function invariant_supply_equals_known_balances() public view {
-        assert(token.totalSupply() == token.balanceOf(ALICE) + token.balanceOf(BOB) + token.balanceOf(CAROL));
+        assert(
+            token.totalSupply()
+                == token.balanceOf(ALICE) + token.balanceOf(BOB) + token.balanceOf(CAROL)
+        );
     }
 
     function _actor(uint8 index) private pure returns (address) {

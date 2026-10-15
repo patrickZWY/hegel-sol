@@ -3,6 +3,29 @@
 User-visible changes, described against the latest release rather than commit by
 commit.
 
+## Unreleased
+
+### Features
+
+- Solady's own ERC20 test suite runs unchanged and passes every test Forge passes.
+  The emulated cheatcodes grew by `expectEmit` in all four overloads, `addr`, and
+  `sign`, and the EVM code-size limit no longer applies to test contracts, as in
+  Forge. `cargo x validate` now runs that suite under both runners.
+- A test that is overloaded, as Forge suites do to pair a fixed case with a fuzzed
+  one, is reported and selected by its full signature, such as
+  `ERC20Test.testMint(address,uint256)`, so the two stay distinct in reports, in the
+  example database, and in a replay.
+- `IHegelVm` in `Hegel.sol` declares the `bytes4` overload of `expectRevert` and the
+  new cheatcodes. Projects that only use the earlier subset need no update.
+- A test contract that fails to deploy is reported by name with the revert reason or
+  halt.
+
+### Fixes
+
+- A call that `expectRevert` matched returned no data, so a test that read the call's
+  declared return value reverted while decoding it and was reported as a failure Forge
+  would not report. The runner now returns zero-filled data, as Forge does.
+
 ## 0.1.0 - 2026-10-15
 
 First release.

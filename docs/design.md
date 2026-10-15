@@ -328,6 +328,27 @@ The repository root was thinned at the same time. `DESIGN.md` became `docs/desig
 pre-push hook moved under `.github/hooks/`. Each top-level directory still serves one
 audience; the three that moved serve the maintainer, who already lives in those trees.
 
+### 2026-10-15: the first unchanged Forge suite
+
+Every validation harness so far was written inside the runner's cheatcode subset, so
+compatibility with suites written for Forge was unmeasured. Solady's own ERC20 suite was
+run test by test to list what blocked it; the gaps were `expectEmit`, `addr` and `sign`,
+and two runner bugs a real suite exposed: a matched `expectRevert` returned empty data,
+so decoding the call's declared return value reverted, and overloaded tests shared one
+name in reports, the example database, and replay selection. All four were fixed from
+the suite's own evidence rather than from a list of likely cheatcodes, and the suite is
+now vendored under the validation project and run by `cargo x validate`.
+
+Event expectations follow Forge's shape. The event the test emits right after
+`expectEmit`, at the declaring call depth, is the template; the first call made from
+that frame is the one whose events must satisfy the pending templates in order; a
+template left unmatched when that call returns fails the example. Expectations are
+cleared at the end of every call into the contract under test, so a stateful handler
+cannot leak one into the next step.
+
+Test contracts are exempt from the EVM code-size limit, as under Forge, so a large
+upstream test contract deploys without enabling the optimizer.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
@@ -337,4 +358,5 @@ audience; the three that moved serve the maintainer, who already lives in those 
 - Antithesis: set `hegel_settings_set_test_location` per test and run under the
   `workload` profile.
 - Compatibility growth: extend cheatcodes, console overloads, forked-state support, and
-  environment controls when real suites require them.
+  environment controls when real suites require them. Known from Solady's suites:
+  Forge's target-contract invariant style and `vm.getBlockNumber`.

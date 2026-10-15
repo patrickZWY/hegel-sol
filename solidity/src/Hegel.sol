@@ -97,10 +97,27 @@ interface IHegelVm {
     function expectRevert() external;
     /// @notice Require the next external call to revert with matching data.
     function expectRevert(bytes calldata revertData) external;
+    /// @notice Require the next external call to revert with a custom error selector.
+    function expectRevert(bytes4 revertData) external;
+    /// @notice Require the next external call to emit the event this contract
+    /// emits right after this call, matching every topic and the data.
+    function expectEmit() external;
+    /// @notice As `expectEmit()`, additionally requiring a particular emitter.
+    function expectEmit(address emitter) external;
+    /// @notice Require the next external call to emit the event this contract
+    /// emits right after this call, matching the chosen topics and data. The
+    /// event signature is always matched.
+    function expectEmit(bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData) external;
+    /// @notice As the four-flag `expectEmit`, additionally requiring a particular emitter.
+    function expectEmit(bool checkTopic1, bool checkTopic2, bool checkTopic3, bool checkData, address emitter) external;
     /// @notice Associate a diagnostic label with an address.
     function label(address account, string calldata label) external;
     /// @notice Reject the current generated example unless condition is true.
     function assume(bool condition) external;
+    /// @notice Address of the account a secp256k1 private key controls.
+    function addr(uint256 privateKey) external pure returns (address);
+    /// @notice Sign a digest with a private key, in the form `ecrecover` takes.
+    function sign(uint256 privateKey, bytes32 digest) external pure returns (uint8 v, bytes32 r, bytes32 s);
 }
 
 abstract contract HegelTest {

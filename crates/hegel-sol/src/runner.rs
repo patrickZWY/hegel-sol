@@ -10,7 +10,7 @@ use std::{
 
 use alloy_json_abi::Function;
 use alloy_primitives::{Address, Bytes, U256, hex};
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use revm::{Context, InspectCommitEvm, MainBuilder, MainContext, context::result::ExecutionResult};
 use serde::Serialize;
 
@@ -23,7 +23,7 @@ use crate::{
     inspector::{Abort, Draw, HegelInspector},
     protocol,
     sourcemap::SourceLocation,
-    values::format_value,
+    values::{decode_revert, format_value},
 };
 
 /// Objective name for the basic-block coverage score. All tests report under one
@@ -246,7 +246,7 @@ pub fn list_project(options: &Options) -> Result<Vec<String>> {
     let loaded = FoundryProject::new(&options.root).compile()?;
     Ok(select(&loaded.contracts, options)?
         .into_iter()
-        .map(|test| test.name())
+        .map(|test| test.name(&options.conventions))
         .collect())
 }
 
@@ -283,10 +283,11 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
             continue;
         }
         for function in contract.test_functions(conventions) {
+            let label = test_label(contract, function, conventions);
             let test_matches = options
                 .match_test
                 .as_ref()
-                .is_none_or(|pattern| function.name.contains(pattern));
+                .is_none_or(|pattern| label.contains(pattern));
             if test_matches {
                 jobs.push(DiscoveredTest::Stateless(contract, function));
             }
@@ -313,6 +314,25 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
         }
     }
     jobs
+}
+
+/// How a stateless test is named in reports and selected by `--match-test`.
+///
+/// Solidity allows a test to be overloaded, and Forge suites do it to pair a
+/// fixed case with a fuzzed one. The plain name would then make the two
+/// indistinguishable in reports, in the example database, and in a replay, so an
+/// overloaded test carries its full signature while every other keeps its name.
+fn test_label(contract: &Contract, function: &Function, conventions: &Conventions) -> String {
+    let overloaded = contract
+        .test_functions(conventions)
+        .filter(|candidate| candidate.name == function.name)
+        .count()
+        > 1;
+    if overloaded {
+        function.signature()
+    } else {
+        function.name.clone()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -342,9 +362,13 @@ impl<'a> DiscoveredTest<'a> {
         }
     }
 
-    fn name(self) -> String {
+    fn name(self, conventions: &Conventions) -> String {
         match self {
-            Self::Stateless(contract, function) => format!("{}.{}", contract.name, function.name),
+            Self::Stateless(contract, function) => format!(
+                "{}.{}",
+                contract.name,
+                test_label(contract, function, conventions)
+            ),
             Self::Stateful(contract) => format!("{}.{STATEFUL_SUFFIX}", contract.name),
         }
     }
@@ -362,7 +386,9 @@ impl<'a> PreparedContract<'a> {
     fn new(contract: &'a Contract, options: &Options) -> Result<Self> {
         let conventions = &options.conventions;
         let mut harness = Harness::new(&options.actor_addresses());
-        let address = harness.deploy(contract.bytecode.clone())?;
+        let address = harness
+            .deploy(contract.bytecode.clone())
+            .with_context(|| format!("deploying test contract {}", contract.name))?;
         check_protocol_version(contract, &harness, address)?;
 
         let mut step_count = options.step_count;
@@ -612,7 +638,8 @@ fn run_test(
     function: &Function,
     options: &Options,
 ) -> Result<Vec<TestReport>> {
-    let test_name = format!("{}.{}", prepared.contract.name, function.name);
+    let test_name =
+        DiscoveredTest::Stateless(prepared.contract, function).name(&options.conventions);
     drive(test_name, options, |tc| {
         execute_case(prepared, function, tc, options)
     })
@@ -701,7 +728,7 @@ fn execute_case(
         Some(Abort::Invalid) => (Status::Invalid, None, None),
         Some(Abort::Overrun) => (Status::Overrun, None, None),
         Some(Abort::Error(message)) => return Err(anyhow!(message)),
-        None => classify_with_abi(result, prepared.contract, inspector.source_pc()),
+        None => classify(result, prepared.contract, &mut inspector),
     };
     report_coverage(tc, &inspector)?;
     auto_trace.extend(inspector.trace);
@@ -744,8 +771,7 @@ fn setup_failure(
         Some(Abort::Error(message)) => Err(anyhow!(message)),
         None if result.is_success() => Ok(None),
         None => {
-            let (_, origin, source) =
-                classify_with_abi(result, prepared.contract, inspector.source_pc());
+            let (_, origin, source) = classify(result, prepared.contract, inspector);
             let where_ = source.map_or_else(String::new, |source| {
                 format!(" at {}:{}:{}", source.path, source.line, source.column)
             });
@@ -773,6 +799,23 @@ fn inspected_call(
     let mut evm = context.build_mainnet_with_inspector(inspector);
     evm.inspect_tx_commit(evm::transaction(caller, evm::GAS_LIMIT, address, calldata))
         .map_err(|error| anyhow!("EVM transaction failed: {error:?}"))
+}
+
+/// Verdict on one call into the contract under test. A call that returned
+/// normally can still fail the example when an event it was expected to emit
+/// never appeared.
+fn classify(
+    result: ExecutionResult,
+    contract: &Contract,
+    inspector: &mut HegelInspector<'_>,
+) -> (Status, Option<String>, Option<SourceLocation>) {
+    let pc = inspector.source_pc();
+    if result.is_success()
+        && let Some(unmet) = inspector.take_unmet_expectation()
+    {
+        return (Status::Interesting, Some(unmet), None);
+    }
+    classify_with_abi(result, contract, pc)
 }
 
 fn classify_with_abi(
@@ -812,35 +855,6 @@ fn decode_custom_error(output: &[u8], contract: &Contract) -> Option<String> {
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!("{}({rendered})", error.name))
-}
-
-pub fn decode_revert(output: &[u8]) -> String {
-    use alloy_primitives::keccak256;
-    if output.len() >= 4
-        && output[..4] == keccak256("Error(string)")[..4]
-        && let Some(message) = decode_abi_string(&output[4..])
-    {
-        return format!("revert: {message}");
-    }
-    if output.len() >= 36 && output[..4] == keccak256("Panic(uint256)")[..4] {
-        return format!("panic code 0x{:x}", U256::from_be_slice(&output[4..36]));
-    }
-    if output.len() >= 4 {
-        format!("revert selector 0x{}", hex::encode(&output[..4]))
-    } else {
-        "revert with no data".into()
-    }
-}
-
-fn decode_abi_string(args: &[u8]) -> Option<String> {
-    if args.len() < 64 {
-        return None;
-    }
-    let offset = usize::try_from(U256::from_be_slice(&args[..32])).ok()?;
-    let len_end = offset.checked_add(32)?;
-    let len = usize::try_from(U256::from_be_slice(args.get(offset..len_end)?)).ok()?;
-    let end = len_end.checked_add(len)?;
-    Some(String::from_utf8_lossy(args.get(len_end..end)?).into_owned())
 }
 
 pub fn database_argument(root: &Path, value: &str) -> String {
@@ -1025,8 +1039,8 @@ fn execute_stateful_case(
                 None => {}
             }
 
-            let source_pc = machine.inspector.source_pc();
-            let (status, origin, source) = classify_with_abi(result, prepared.contract, source_pc);
+            let (status, origin, source) =
+                classify(result, prepared.contract, &mut machine.inspector);
             if status == Status::Valid {
                 tc.stop_span(false)?;
                 continue;
@@ -1104,9 +1118,8 @@ fn check_invariants(
             }
             Some(Abort::Error(message)) => return Err(anyhow!(message)),
             None => {
-                let source_pc = machine.inspector.source_pc();
                 let (status, origin, source) =
-                    classify_with_abi(result, machine.prepared.contract, source_pc);
+                    classify(result, machine.prepared.contract, &mut machine.inspector);
                 if status != Status::Valid {
                     return Ok(Some(take_case(
                         machine,

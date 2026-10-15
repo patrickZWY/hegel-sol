@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Result, anyhow};
 use revm::{
     Context, ExecuteCommitEvm, MainBuilder, MainContext,
     bytecode::Bytecode,
@@ -72,9 +72,21 @@ impl Harness {
         let result = evm
             .transact_commit(tx)
             .map_err(|error| anyhow!("deployment failed: {error:?}"))?;
-        result
-            .created_address()
-            .context("contract deployment did not succeed")
+        if let Some(address) = result.created_address() {
+            return Ok(address);
+        }
+        let reason = match result {
+            revm::context::result::ExecutionResult::Revert { output, .. } => {
+                crate::values::decode_revert(&output)
+            }
+            revm::context::result::ExecutionResult::Halt { reason, .. } => {
+                format!("EVM halt: {reason:?}")
+            }
+            revm::context::result::ExecutionResult::Success { .. } => {
+                "no contract was created".into()
+            }
+        };
+        anyhow::bail!("contract deployment did not succeed: {reason}")
     }
 
     pub fn call(&mut self, to: Address, calldata: Bytes) -> Result<ExecutionResult> {
@@ -86,6 +98,9 @@ pub fn config() -> CfgEnv {
     let mut cfg = CfgEnv::default();
     cfg.disable_nonce_check = true;
     cfg.tx_gas_limit_cap = Some(GAS_LIMIT);
+    // Test contracts routinely exceed EIP-170's 24 KiB, and Forge exempts them
+    // from the limit; the contracts they deploy are not under test for size here.
+    cfg.limit_contract_code_size = Some(usize::MAX);
     cfg
 }
 

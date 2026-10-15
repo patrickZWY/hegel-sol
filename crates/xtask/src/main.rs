@@ -332,6 +332,9 @@ fn bench(args: Bench) -> Result<()> {
     ))
 }
 
+const REAL_WORLD_ROOT: &str = "crates/tests-integration/projects/real-world";
+const SOLADY_ROOT: &str = "crates/tests-integration/projects/real-world/solady";
+
 fn validate(args: Validate) -> Result<()> {
     run(cargo(["build", "--release", "--locked", "-p", "hegel-sol"]))?;
     let runner = workspace().join("target/release/hegel-sol");
@@ -340,9 +343,9 @@ fn validate(args: Validate) -> Result<()> {
     let stateful_steps = args.stateful_steps.to_string();
     let seed = args.seed.to_string();
 
-    for (name, prefix) in [
-        ("Solady ERC20", "SoladyERC20"),
-        ("OpenZeppelin ERC20", "OpenZeppelinERC20"),
+    for (name, root, prefix) in [
+        ("Solady ERC20", SOLADY_ROOT, "SoladyERC20"),
+        ("OpenZeppelin ERC20", REAL_WORLD_ROOT, "OpenZeppelinERC20"),
     ] {
         let stateless_contract = format!("{prefix}StatelessTest");
         let stateful_contract = format!("{prefix}StatefulTest");
@@ -352,7 +355,7 @@ fn validate(args: Validate) -> Result<()> {
         baseline.args([
             "test",
             "--root",
-            "crates/tests-integration/projects/real-world",
+            root,
             "--match-contract",
             &stateless_contract,
             "--fuzz-runs",
@@ -368,7 +371,7 @@ fn validate(args: Validate) -> Result<()> {
             &runner,
             [
                 "--root",
-                "crates/tests-integration/projects/real-world",
+                root,
                 "--match-contract",
                 &stateless_contract,
                 "--test-cases",
@@ -386,13 +389,52 @@ fn validate(args: Validate) -> Result<()> {
             &runner,
             [
                 "--root",
-                "crates/tests-integration/projects/real-world",
+                root,
                 "--match-contract",
                 &stateful_contract,
                 "--test-cases",
                 &stateful_cases,
                 "--step-count",
                 &stateful_steps,
+                "--seed",
+                &seed,
+                "--database",
+                "off",
+                "--show-timings",
+            ],
+        ))?;
+    }
+
+    // Solady's own ERC20 suite, unchanged: the compatibility check that matters
+    // is whether a suite written for Forge runs as it does under Forge.
+    section("Solady upstream ERC20 suite: Forge");
+    let mut baseline = Command::new("forge");
+    baseline.args([
+        "test",
+        "--root",
+        SOLADY_ROOT,
+        "--match-contract",
+        "^(ERC20Test|ERC20ForPermit2Test)$",
+        "--fuzz-runs",
+        &stateless_cases,
+        "--fuzz-seed",
+        &seed,
+    ]);
+    baseline.current_dir(workspace());
+    run(baseline)?;
+    for contract in ["ERC20Test", "ERC20ForPermit2Test"] {
+        section(&format!(
+            "Solady upstream ERC20 suite: hegel-sol {contract}"
+        ));
+        run(runner_cmd(
+            &runner,
+            [
+                "--root",
+                SOLADY_ROOT,
+                "--match-contract",
+                contract,
+                "--test-cases",
+                &stateless_cases,
                 "--seed",
                 &seed,
                 "--database",
@@ -467,26 +509,14 @@ fn profile(args: Profile) -> Result<()> {
     let steps = args.steps.to_string();
     let seed = args.seed.to_string();
     let (root, match_contract, stateful) = match args.workload {
-        ProfileWorkload::SoladyStateless => (
-            "crates/tests-integration/projects/real-world",
-            "SoladyERC20StatelessTest",
-            false,
-        ),
-        ProfileWorkload::SoladyStateful => (
-            "crates/tests-integration/projects/real-world",
-            "SoladyERC20StatefulTest",
-            true,
-        ),
-        ProfileWorkload::OpenzeppelinStateless => (
-            "crates/tests-integration/projects/real-world",
-            "OpenZeppelinERC20StatelessTest",
-            false,
-        ),
-        ProfileWorkload::OpenzeppelinStateful => (
-            "crates/tests-integration/projects/real-world",
-            "OpenZeppelinERC20StatefulTest",
-            true,
-        ),
+        ProfileWorkload::SoladyStateless => (SOLADY_ROOT, "SoladyERC20StatelessTest", false),
+        ProfileWorkload::SoladyStateful => (SOLADY_ROOT, "SoladyERC20StatefulTest", true),
+        ProfileWorkload::OpenzeppelinStateless => {
+            (REAL_WORLD_ROOT, "OpenZeppelinERC20StatelessTest", false)
+        }
+        ProfileWorkload::OpenzeppelinStateful => {
+            (REAL_WORLD_ROOT, "OpenZeppelinERC20StatefulTest", true)
+        }
         ProfileWorkload::UniswapStateless => (
             "crates/tests-integration/projects/real-world/uniswap-v2",
             "UniswapV2ValidationTest",

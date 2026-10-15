@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy_dyn_abi::DynSolValue;
-use alloy_primitives::{Address, B256, I256, U256};
+use alloy_primitives::{Address, B256, I256, Log, U256};
 use revm::{
     Context as RevmContext, Inspector,
     context::{
@@ -31,6 +31,12 @@ const JUMPDEST: u8 = 0x5b;
 const REVERT: u8 = 0xfd;
 const INVALID: u8 = 0xfe;
 
+/// Return data handed back in place of a revert that `vm.expectRevert` matched.
+/// The test goes on to ABI-decode whatever the call declares it returns, and an
+/// empty buffer would make that decoding revert. Zeros decode as zero, false, or
+/// empty for every type, which is what Foundry hands back too.
+static MATCHED_REVERT_OUTPUT: [u8; 8192] = [0; 8192];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Draw {
     pub name: String,
@@ -58,6 +64,10 @@ pub struct HegelInspector<'a> {
     persistent_prank: Option<Address>,
     expected_revert: Option<Option<Vec<u8>>>,
     active_expect: Option<(Address, Option<Vec<u8>>)>,
+    expected_emits: Vec<ExpectedEmit>,
+    /// The call whose logs must satisfy the pending event expectations, as the
+    /// depth it was made from and its target.
+    emit_check: Option<(usize, Address)>,
     labels: HashMap<Address, String>,
     timestamp: Option<U256>,
     block_number: Option<U256>,
@@ -70,6 +80,42 @@ pub struct HegelInspector<'a> {
 struct PoolValues {
     engine: Pool,
     values: HashMap<i64, B256>,
+}
+
+/// One `vm.expectEmit`, filled in by the event the test emits next and satisfied
+/// by a matching event from the call after that.
+struct ExpectedEmit {
+    /// Call depth the expectation was declared at, so only the declaring frame's
+    /// own event fills it and only calls made from that frame are checked.
+    depth: usize,
+    /// Whether topics 1 to 3 and the data must match; the event signature in
+    /// topic 0 always must.
+    checks: [bool; 4],
+    emitter: Option<Address>,
+    log: Option<Log>,
+    found: bool,
+}
+
+impl ExpectedEmit {
+    fn matches(&self, log: &Log) -> bool {
+        let Some(expected) = &self.log else {
+            return false;
+        };
+        if self.emitter.is_some_and(|emitter| emitter != log.address) {
+            return false;
+        }
+        let topics = log.topics();
+        let expected_topics = expected.topics();
+        if topics.len() != expected_topics.len() || topics.first() != expected_topics.first() {
+            return false;
+        }
+        for (index, check) in self.checks[..3].iter().enumerate() {
+            if *check && topics.get(index + 1) != expected_topics.get(index + 1) {
+                return false;
+            }
+        }
+        !self.checks[3] || log.data.data == expected.data.data
+    }
 }
 
 impl<'a> HegelInspector<'a> {
@@ -87,6 +133,8 @@ impl<'a> HegelInspector<'a> {
             persistent_prank: None,
             expected_revert: None,
             active_expect: None,
+            expected_emits: Vec::new(),
+            emit_check: None,
             labels: HashMap::new(),
             timestamp: None,
             block_number: None,
@@ -132,6 +180,31 @@ impl<'a> HegelInspector<'a> {
         if let Some(number) = self.block_number {
             block.number = number;
         }
+    }
+
+    /// An expectation left unmet once the call under test has returned, as the
+    /// failure to report. Expectations only make sense within the call that set
+    /// them, so taking them clears the slate for the next one.
+    pub fn take_unmet_expectation(&mut self) -> Option<String> {
+        let unmet = self
+            .expected_emits
+            .iter()
+            .find(|expected| !expected.found)
+            .map(|expected| match &expected.log {
+                Some(log) => format!(
+                    "expected event {} from {} was not emitted",
+                    log.topics()
+                        .first()
+                        .map_or_else(|| "<no topics>".to_owned(), ToString::to_string),
+                    expected
+                        .emitter
+                        .map_or_else(|| "any emitter".to_owned(), |emitter| self.display(emitter))
+                ),
+                None => "vm.expectEmit was not followed by an event to expect".to_owned(),
+            });
+        self.expected_emits.clear();
+        self.emit_check = None;
+        unmet
     }
 
     /// Human-readable name for an address, honouring `vm.label`.
@@ -344,6 +417,50 @@ impl<'a> HegelInspector<'a> {
             }
             VmOp::ExpectRevertAny => self.expected_revert = Some(None),
             VmOp::ExpectRevertData => self.expected_revert = Some(Some(arg_data(args, 0)?)),
+            VmOp::ExpectEmit => {
+                // The overloads differ only in which parts they check and whether
+                // they pin the emitter: (), (address), (bool x4), (bool x4, address).
+                let flags = args.len() >= 4;
+                let checks = if flags {
+                    [
+                        arg_bool(args, 0)?,
+                        arg_bool(args, 1)?,
+                        arg_bool(args, 2)?,
+                        arg_bool(args, 3)?,
+                    ]
+                } else {
+                    [true; 4]
+                };
+                let emitter = match args.len() {
+                    1 => Some(arg_address(args, 0)?),
+                    5 => Some(arg_address(args, 4)?),
+                    _ => None,
+                };
+                self.expected_emits.push(ExpectedEmit {
+                    depth: ctx.journaled_state.depth(),
+                    checks,
+                    emitter,
+                    log: None,
+                    found: false,
+                });
+            }
+            VmOp::Addr => {
+                let key = signing_key(arg_u256(args, 0)?, "vm.addr")?;
+                return Ok(encode(DynSolValue::Address(key_address(&key))));
+            }
+            VmOp::Sign => {
+                let key = signing_key(arg_u256(args, 0)?, "vm.sign")?;
+                let digest = arg_b256(args, 1)?;
+                let (signature, recovery) = key
+                    .sign_prehash_recoverable(digest.as_slice())
+                    .map_err(|error| Abort::Error(format!("vm.sign failed: {error}")))?;
+                let (r, s) = signature.split_bytes();
+                return Ok(encode_params(vec![
+                    DynSolValue::Uint(U256::from(27 + recovery.to_byte()), 8),
+                    DynSolValue::FixedBytes(B256::from_slice(&r), 32),
+                    DynSolValue::FixedBytes(B256::from_slice(&s), 32),
+                ]));
+            }
             VmOp::Label => {
                 self.labels
                     .insert(arg_address(args, 0)?, arg_str(args, 1)?.to_owned());
@@ -467,7 +584,44 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
         if let Some(expected) = self.expected_revert.take() {
             self.active_expect = Some((inputs.target_address, expected));
         }
+        // The first call made from the frame that declared event expectations is
+        // the one whose events must satisfy them.
+        let depth = ctx.journaled_state.depth();
+        if self.emit_check.is_none()
+            && self
+                .expected_emits
+                .iter()
+                .any(|expected| expected.log.is_some() && expected.depth == depth)
+        {
+            self.emit_check = Some((depth, inputs.target_address));
+        }
         None
+    }
+
+    fn log(&mut self, ctx: &mut RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>>, log: Log) {
+        let depth = ctx.journaled_state.depth();
+        // Until the call under check starts, an event from the declaring frame is
+        // the example of what to expect, not a candidate.
+        if self.emit_check.is_none()
+            && let Some(expected) = self
+                .expected_emits
+                .iter_mut()
+                .find(|expected| expected.log.is_none())
+        {
+            if expected.depth == depth {
+                expected.log = Some(log);
+            }
+            return;
+        }
+        if self.emit_check.is_some()
+            && let Some(expected) = self
+                .expected_emits
+                .iter_mut()
+                .find(|expected| !expected.found)
+            && expected.matches(&log)
+        {
+            expected.found = true;
+        }
     }
 
     fn call_end(
@@ -489,12 +643,37 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
             .is_none_or(|expected| result.result.output.starts_with(expected));
         if reverted && matches {
             result.result.result = InstructionResult::Return;
-            result.result.output = Bytes::new();
+            result.result.output = Bytes::from_static(&MATCHED_REVERT_OUTPUT);
         } else {
             result.result.result = InstructionResult::Revert;
-            result.result.output = Bytes::from_static(b"hegel-sol: expected revert did not match");
+            result.result.output = revert_message("hegel-sol: expected revert did not match");
         }
     }
+}
+
+/// Reproduce a sender's address and signing key from a raw private key, as
+/// `vm.addr` and `vm.sign` do.
+fn signing_key(key: U256, cheatcode: &str) -> Result<k256::ecdsa::SigningKey, Abort> {
+    k256::ecdsa::SigningKey::from_slice(&key.to_be_bytes::<32>()).map_err(|_| {
+        Abort::Error(format!(
+            "{cheatcode}: the private key is zero or not below the secp256k1 curve order"
+        ))
+    })
+}
+
+fn key_address(key: &k256::ecdsa::SigningKey) -> Address {
+    let point = key.verifying_key().to_encoded_point(false);
+    Address::from_raw_public_key(&point.as_bytes()[1..])
+}
+
+/// Revert data a Solidity `revert("message")` would produce, so the runner's own
+/// verdicts decode like any other reason string.
+fn revert_message(message: &str) -> Bytes {
+    let mut data = protocol::selector("Error(string)").to_vec();
+    data.extend(
+        DynSolValue::Tuple(vec![DynSolValue::String(message.to_owned())]).abi_encode_params(),
+    );
+    Bytes::from(data)
 }
 
 /// Identify a basic block by the contract it belongs to and its offset. Address
@@ -534,6 +713,11 @@ fn unknown_selector(selector: &[u8]) -> Abort {
 
 fn encode(value: DynSolValue) -> Bytes {
     Bytes::from(value.abi_encode())
+}
+
+/// Encode several return values, as a function returning a tuple does.
+fn encode_params(values: Vec<DynSolValue>) -> Bytes {
+    Bytes::from(DynSolValue::Tuple(values).abi_encode_params())
 }
 
 fn mismatch(index: usize, expected: &str) -> Abort {

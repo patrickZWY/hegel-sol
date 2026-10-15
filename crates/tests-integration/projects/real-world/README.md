@@ -5,9 +5,11 @@ The harnesses are local additions; the upstream Solidity files and licenses are
 vendored so validation does not depend on a network checkout. The copied sources
 were checked byte for byte against the pinned revisions on 2026-09-29.
 
-- [Solady][solady] ERC20 at `2afba69bf67b78dd4abeadcc696052b3a6f71499`:
-  [`ERC20.sol`](lib/solady/src/tokens/ERC20.sol) and
-  [MIT license](lib/solady/LICENSE.txt).
+- [Solady][solady] ERC20 at `2afba69bf67b78dd4abeadcc696052b3a6f71499`, as the
+  [`solady/`](solady) project: [`ERC20.sol`](solady/src/tokens/ERC20.sol), its own
+  [`ERC20.t.sol`](solady/test/ERC20.t.sol) suite with the test utilities and trimmed
+  forge-std it imports under [`test/utils/`](solady/test/utils), and the
+  [MIT license](solady/LICENSE.txt).
 - [OpenZeppelin Contracts][openzeppelin] ERC20 at
   `32b5b8c4655448291e27272d43607b9e3ae8c1d8`:
   [`ERC20.sol`](lib/openzeppelin/contracts/token/ERC20/ERC20.sol), its four imported
@@ -20,7 +22,7 @@ were checked byte for byte against the pinned revisions on 2026-09-29.
 [openzeppelin]: https://github.com/OpenZeppelin/openzeppelin-contracts
 [uniswap]: https://github.com/Uniswap/v2-core
 
-[`SoladyERC20.t.sol`](test/SoladyERC20.t.sol) and
+[`SoladyERC20.t.sol`](solady/test/SoladyERC20.t.sol) and
 [`OpenZeppelinERC20.t.sol`](test/OpenZeppelinERC20.t.sol) check transfer accounting
 and supply across mint, burn, and transfer sequences. The
 [`UniswapV2.t.sol`](uniswap-v2/test/UniswapV2.t.sol) harness checks that swaps do
@@ -33,7 +35,8 @@ fits the EVM code-size limit.
 Run the complete comparison with `cargo x validate`. Use `--seed`,
 `--stateless-cases`, `--stateful-cases`, and `--stateful-steps` to vary it. The
 workflow builds a release runner, runs each stateless property under Forge and
-hegel-sol, then runs each stateful property under hegel-sol. Both runners receive
+hegel-sol, runs each stateful property under hegel-sol, and runs Solady's own ERC20
+suite under both. Both runners receive
 the same numeric seed and case count, but their generators do not produce the
 same inputs. Stateful runs have no Forge baseline yet. `cargo x test` runs the
 default validation campaign after the Rust tests, so CI and the pre-push hook
@@ -44,6 +47,23 @@ release runner in GNU time and writes wall time, CPU time, and peak RSS to `/tmp
 by default. It measures the runner process, including Foundry artifact loading,
 but excludes the preceding release build. Pass `--no-coverage-target` to measure
 the effect of disabling basic-block feedback on the same workload.
+
+## Upstream suite: 2026-10-15
+
+The first pass only ran harnesses written to stay inside the runner's cheatcode
+subset, so it could not say whether a suite written for Forge runs at all. Solady's
+`test/ERC20.t.sol` was vendored unchanged with the utilities it imports, and every
+test was run under hegel-sol one at a time to list what blocked it. The suite needed
+four runner changes: `vm.expectEmit`, `vm.addr` and `vm.sign`, zero-filled return
+data after a matched `vm.expectRevert`, and distinct names for overloaded tests.
+After them the 29 tests of `ERC20Test` and the 4 of `ERC20ForPermit2Test` pass under
+hegel-sol as they do under Forge, with no false failures.
+
+Solady's `_random()` draws from a storage-seeded hash rather than from the fuzzer, so
+the values it feeds are outside the engine's control and would not shrink. Two
+compatibility limits remain: `ERC20Invariants` declares its invariant in Forge's
+target-contract style, so only its code-size test is discovered, and the neighbouring
+`ERC20VotesTest` uses `vm.getBlockNumber`, which is not emulated.
 
 ## First pass: 2026-09-29
 
