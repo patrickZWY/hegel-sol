@@ -536,9 +536,7 @@ impl<'a> HegelInspector<'a> {
             VmOp::Sign => {
                 let key = signing_key(arg_u256(args, 0)?, "vm.sign")?;
                 let digest = arg_b256(args, 1)?;
-                let (signature, recovery) = key
-                    .sign_prehash_recoverable(digest.as_slice())
-                    .map_err(|error| Abort::Error(format!("vm.sign failed: {error}")))?;
+                let (signature, recovery) = key.sign_prehash_recoverable(digest.as_slice());
                 let (r, s) = signature.split_bytes();
                 return Ok(VmOutcome::Return(encode_params(vec![
                     DynSolValue::Uint(U256::from(27 + recovery.to_byte()), 8),
@@ -780,7 +778,7 @@ fn signing_key(key: U256, cheatcode: &str) -> Result<k256::ecdsa::SigningKey, Ab
 }
 
 fn key_address(key: &k256::ecdsa::SigningKey) -> Address {
-    let point = key.verifying_key().to_encoded_point(false);
+    let point = key.verifying_key().to_sec1_point(false);
     Address::from_raw_public_key(&point.as_bytes()[1..])
 }
 
