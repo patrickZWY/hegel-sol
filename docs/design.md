@@ -378,6 +378,40 @@ random sequences, while the engine's swarm selection, which enables a random sub
 rules per case, makes single-rule cases common. Fixture bugs should corrupt an
 accounting identity unconditionally, as the showcase example does.
 
+### 2026-10-15: time and actors as draws
+
+A stateful test already has the shape of a TLA+ model: `setUp()` is `Init`, the rules
+are the disjuncts of `Next`, each generated argument is an existential choice, and the
+invariant is checked between actions. What it lacked was the environment. Whether a
+block boundary falls between two calls decides whether a same-block guard holds, and
+who makes a call decides which guard a handler meets, yet both were fixed by the runner.
+Both are now draws. A rule named `env.advance` joins the state machine when the contract
+or the options allow it; it draws a block count, bumps the inspector's sticky block and
+timestamp overrides, and is spanned like any rule so the shrinker can drop it. It is off
+by default so an existing suite keeps a still clock. `targetSenders()` and
+`excludeSenders()` are read on the same post-`setUp()` probe as the targets, and the
+registered accounts replace the synthetic actors. The probe runs without an inspector,
+so a fixture whose registration depends on a cheatcode that returns a value registers
+nothing; a `startPrank` there is harmless, which exposed the next point.
+
+The prank fix is a Forge semantics correction. revm reports the transaction's entry
+frame at depth one, and the inspector applied an open prank to every frame, so a
+`startPrank` left by `setUp()` replaced the sender the machine had drawn. The inspector
+now records the depth it first sees in each transaction and pranks only frames below
+it.
+
+The worked example encodes a price manipulation the way a model checker would, but as a
+state predicate rather than a trace pattern: the attacker's options are handlers sized
+as percentages of what they hold, the vault's solvency at a reference price is the
+invariant, and `hegel.target` reports the shortfall so the search climbs. The runner now
+keeps the best score per label for the engine, because an invariant observes on every
+check and the engine accepts one observation per label per example. The credit line in
+the example is deliberately not a same-transaction flash loan: a step is one
+transaction, and the guarded variant's lesson is that holding the position across a
+block is still an exploit, only a dearer one. Forge's invariant mode cannot run the
+example as a baseline, because without `targetContracts()` it fuzzes every deployed
+contract including the token's `mint`, which is a different model, not a weaker search.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
@@ -387,5 +421,9 @@ accounting identity unconditionally, as the showcase example does.
 - Antithesis: set `hegel_settings_set_test_location` per test and run under the
   `workload` profile.
 - Compatibility growth: extend cheatcodes, console overloads, forked-state support, and
-  environment controls when real suites require them. Known from Solady's suites:
-  `vm.getBlockNumber`. Forge's `targetSelectors` and `targetSenders` are not read.
+  environment controls when real suites require them. Forge's `targetSelectors` is not
+  read.
+- Richer histories: in-handler `hegel.draw*` entries land at the end of a stateful
+  trace rather than inside their step, emitted events are not reported, and a bounded
+  temporal property over the trace still has to be hand-rolled as contract state. A
+  monitor over the runner's own step record would cover all three.

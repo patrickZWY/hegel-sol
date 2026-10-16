@@ -12,7 +12,7 @@ Use `cargo x` for every build, test, lint, and formatting command, and read
 cargo x lint            # rustfmt, clippy, forge fmt, typos; --fix applies fixes
 cargo x build --locked  # every crate and every Foundry project
 cargo x test            # unit, integration, and pinned real-contract tests
-cargo x demo            # three intentional failures, found and shrunk
+cargo x demo            # four intentional failures, found and shrunk
 cargo x bench           # release-mode scaling workloads
 cargo x validate        # pinned real-contract properties under Forge and hegel-sol
 cargo x profile         # wall time, CPU time, and peak memory for one real workload

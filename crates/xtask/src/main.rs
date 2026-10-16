@@ -227,7 +227,7 @@ fn test(args: Test) -> Result<()> {
     })
 }
 
-/// Three intentionally failing tests, each checked to fail in the expected way,
+/// Four intentionally failing tests, each checked to fail in the expected way,
 /// so the demo doubles as an end-to-end smoke test of the showcase project.
 fn demo() -> Result<()> {
     section("Building hegel-sol");
@@ -244,7 +244,7 @@ fn demo() -> Result<()> {
         "quiet",
     ];
 
-    section("1/3 Stateless property: find and shrink an ERC20 accounting bug");
+    section("1/4 Stateless property: find and shrink an ERC20 accounting bug");
     expect_failure(
         &runner,
         "ERC20SpikeTest.test_transfer_preserves_supply",
@@ -254,7 +254,7 @@ fn demo() -> Result<()> {
             .chain(["--match-contract", "ERC20SpikeTest", "--test-cases", "50"]),
     )?;
 
-    section("2/3 Stateful property: shrink a bug to the shortest rule sequence");
+    section("2/4 Stateful property: shrink a bug to the shortest rule sequence");
     expect_failure(
         &runner,
         "StatefulCounterTest.stateful",
@@ -267,7 +267,7 @@ fn demo() -> Result<()> {
         ]),
     )?;
 
-    section("3/3 Solidity diagnostics: decode a custom error and console.log");
+    section("3/4 Solidity diagnostics: decode a custom error and console.log");
     expect_failure(
         &runner,
         "CustomErrorTest.test_custom_error",
@@ -277,8 +277,22 @@ fn demo() -> Result<()> {
             .chain(["--match-contract", "CustomErrorTest", "--test-cases", "1"]),
     )?;
 
+    section("4/4 Attack search: a flash-loan price manipulation across a block boundary");
+    expect_failure(
+        &runner,
+        "SameBlockGuardTest.stateful",
+        common.iter().copied().chain([
+            "--match-contract",
+            "SameBlockGuardTest",
+            "--test-cases",
+            "300",
+            "--actors",
+            "1",
+        ]),
+    )?;
+
     section("Demo complete");
-    println!("All three expected failures were found, minimized, and reported.");
+    println!("All four expected failures were found, minimized, and reported.");
     Ok(())
 }
 

@@ -18,7 +18,10 @@ use serde::Serialize;
 use crate::{
     artifacts::{Contract, FoundryProject, Project},
     autodraw::Limits,
-    discovery::{Conventions, EXCLUDE_CONTRACTS, FAILED_FLAG, STATEFUL_SUFFIX, TARGET_CONTRACTS},
+    discovery::{
+        Conventions, EXCLUDE_CONTRACTS, EXCLUDE_SENDERS, FAILED_FLAG, STATEFUL_SUFFIX,
+        TARGET_CONTRACTS, TARGET_SENDERS,
+    },
     engine::{Context as HegelContext, Error, Settings, Status, TestCase},
     evm::{self, Database, Harness},
     inspector::{Abort, Draw, HegelInspector},
@@ -57,6 +60,9 @@ pub struct Options {
     pub conventions: Conventions,
     /// Distinct `msg.sender` values the state machine may call handlers from.
     pub actors: usize,
+    /// Most blocks the engine may skip in one stateful step; zero keeps time
+    /// still unless a handler calls `roll` or `warp` itself.
+    pub max_block_advance: u64,
     /// Treat a reverting handler as a rejected step instead of a failure.
     pub allow_rule_reverts: bool,
     /// Report basic-block coverage to the engine as a target score.
@@ -84,6 +90,7 @@ impl Default for Options {
             fail_fast: false,
             conventions: Conventions::default(),
             actors: 3,
+            max_block_advance: 0,
             allow_rule_reverts: false,
             coverage_target: true,
         }
@@ -299,9 +306,11 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
         }
 
         // A stateful test supplies its handlers either as `rule_*` functions or,
-        // in Forge's style, as contracts it registers through `targetContracts()`.
+        // in Forge's style, as contracts it registers through `targetContracts()`
+        // or implicitly deploys while registering `targetSenders()`.
         let has_rules = contract.rule_functions(conventions).next().is_some();
-        let has_targets = contract.nullary(TARGET_CONTRACTS).is_some();
+        let has_targets = contract.nullary(TARGET_CONTRACTS).is_some()
+            || contract.nullary(TARGET_SENDERS).is_some();
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
         if !has_invariants || !(has_rules || has_targets) {
             continue;
@@ -391,7 +400,18 @@ struct PreparedContract<'a> {
     failed: Option<Bytes>,
     /// Contracts a Forge-style stateful test wants fuzzed.
     targets: Vec<Target<'a>>,
+    /// Accounts handler calls are made from: the fixture's `targetSenders()`
+    /// when it declares one, otherwise the runner's synthetic actors.
+    senders: Vec<Address>,
     step_count: i64,
+    max_block_advance: u64,
+}
+
+/// What a fixture registered for the state machine once `setUp()` has run.
+#[derive(Default)]
+struct Discovered<'a> {
+    targets: Vec<Target<'a>>,
+    senders: Vec<Address>,
 }
 
 /// A contract the state machine calls in a Forge-style stateful test.
@@ -411,26 +431,32 @@ impl<'a> PreparedContract<'a> {
 
         let setup = contract.nullary(&conventions.setup).map(selector_calldata);
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
-        let targets = if has_invariants && contract.nullary(TARGET_CONTRACTS).is_some() {
+        let registers = contract.nullary(TARGET_CONTRACTS).is_some()
+            || contract.nullary(TARGET_SENDERS).is_some();
+        let discovered = if has_invariants && registers {
             discover_targets(contract, contracts, &harness, address, setup.as_ref())?
         } else {
-            Vec::new()
+            Discovered::default()
+        };
+        let senders = if discovered.senders.is_empty() {
+            options.actor_addresses()
+        } else {
+            harness.fund(discovered.senders.iter().copied());
+            discovered.senders
         };
 
-        let mut step_count = options.step_count;
-        if let Some(function) = contract.nullary(&conventions.step_count) {
-            // Probe on a clone so even a non-view implementation cannot mutate
-            // the snapshot shared by the actual tests.
-            let mut probe = harness.clone();
-            let result = probe.call(address, selector_calldata(function))?;
-            if let Some(output) = result.output()
-                && output.len() >= 32
-                && let Ok(value) = i64::try_from(U256::from_be_slice(&output[..32]))
-                && value > 0
-            {
-                step_count = value;
-            }
-        }
+        let step_count =
+            probe_setting(&harness, address, contract.nullary(&conventions.step_count))
+                .and_then(|value| i64::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(options.step_count);
+        let max_block_advance = probe_setting(
+            &harness,
+            address,
+            contract.nullary(&conventions.max_block_advance),
+        )
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(options.max_block_advance);
         Ok(Self {
             contract,
             address,
@@ -440,35 +466,71 @@ impl<'a> PreparedContract<'a> {
                 .nullary(FAILED_FLAG)
                 .filter(|function| function.outputs.len() == 1)
                 .map(selector_calldata),
-            targets,
+            targets: discovered.targets,
+            senders,
             step_count,
+            max_block_advance,
         })
     }
 }
 
-/// Find the contracts a Forge-style test wants fuzzed.
+/// Read a per-contract setting from a nullary view such as `stepCount()`.
 ///
-/// Targets only exist once `setUp()` has deployed and registered them, so the
-/// fixture runs on a throwaway copy. Forge's rules apply: an explicit
-/// `targetContracts()` list wins, otherwise every contract the fixture deployed
-/// is a target, and `excludeContracts()` removes from either. Each target is
-/// matched back to a compiled artifact by its runtime code to learn its ABI.
+/// The probe runs on a clone so even a non-view implementation cannot mutate
+/// the snapshot shared by the actual tests. A missing function, a revert, or
+/// output that is not one word all mean "use the default".
+fn probe_setting(harness: &Harness, address: Address, function: Option<&Function>) -> Option<U256> {
+    let function = function?;
+    let mut probe = harness.clone();
+    let result = probe.call(address, selector_calldata(function)).ok()?;
+    let output = result.output()?;
+    (output.len() >= 32).then(|| U256::from_be_slice(&output[..32]))
+}
+
+/// Find the contracts a Forge-style test wants fuzzed and the accounts it
+/// wants them called from.
+///
+/// Both only exist once `setUp()` has deployed and registered them, so the
+/// fixture runs on a throwaway copy without an inspector; a fixture whose
+/// registration depends on a cheatcode that returns a value cannot be probed
+/// and registers nothing. Forge's rules apply: an explicit `targetContracts()`
+/// list wins, otherwise every contract the fixture deployed is a target, and
+/// `excludeContracts()` removes from either. Each target is matched back to a
+/// compiled artifact by its runtime code to learn its ABI. `targetSenders()`
+/// minus `excludeSenders()` replaces the synthetic actors when it is non-empty.
 fn discover_targets<'a>(
     contract: &Contract,
     contracts: &'a [Contract],
     harness: &Harness,
     address: Address,
     setup: Option<&Bytes>,
-) -> Result<Vec<Target<'a>>> {
+) -> Result<Discovered<'a>> {
     let base = harness.snapshot();
     let mut probe = harness.clone();
     if let Some(setup) = setup {
         // A fixture that reverts is reported when the tests run; here it just
         // leaves nothing to find.
         if !probe.call(address, setup.clone())?.is_success() {
-            return Ok(Vec::new());
+            return Ok(Discovered::default());
         }
     }
+    let registered = address_list(&mut probe, contract, address, TARGET_SENDERS)?;
+    let excluded_senders = address_list(&mut probe, contract, address, EXCLUDE_SENDERS)?;
+    let mut senders = Vec::new();
+    for sender in &registered {
+        if !excluded_senders.contains(sender) && !senders.contains(sender) {
+            senders.push(*sender);
+        }
+    }
+    if senders.is_empty() && !registered.is_empty() {
+        bail!(
+            "{}.{EXCLUDE_SENDERS}() removes every account {}.{TARGET_SENDERS}() registers, \
+             leaving nothing to call handlers from",
+            contract.name,
+            contract.name
+        );
+    }
+
     let explicit = address_list(&mut probe, contract, address, TARGET_CONTRACTS)?;
     let excluded = address_list(&mut probe, contract, address, EXCLUDE_CONTRACTS)?;
 
@@ -513,7 +575,7 @@ fn discover_targets<'a>(
             });
         }
     }
-    Ok(targets)
+    Ok(Discovered { targets, senders })
 }
 
 /// Call a view returning `address[]`, treating a missing or reverting one as
@@ -843,14 +905,19 @@ fn new_inspector<'a>(tc: &'a TestCase, address: Address, options: &Options) -> H
 /// Report how much of the contract this example reached, so the engine can steer
 /// generation toward examples that reach more. Targeting records an observation
 /// rather than consuming choices, so a budget signal here is not a case failure.
+/// Hand the engine every objective the example produced: the coverage score
+/// and the best `hegel.target` value seen under each label.
 fn report_coverage(tc: &TestCase, inspector: &HegelInspector<'_>) -> Result<()> {
-    let Some(score) = inspector.coverage_score() else {
-        return Ok(());
-    };
-    match tc.target(COVERAGE_LABEL, score as f64) {
-        Ok(()) | Err(Error::Stop(_)) | Err(Error::Assume) => Ok(()),
-        Err(error) => Err(error.into()),
+    let coverage = inspector
+        .coverage_score()
+        .map(|score| (COVERAGE_LABEL, score as f64));
+    for (label, score) in inspector.targets().chain(coverage) {
+        match tc.target(label, score) {
+            Ok(()) | Err(Error::Stop(_)) | Err(Error::Assume) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
+    Ok(())
 }
 
 fn execute_case(
@@ -1031,20 +1098,38 @@ pub fn database_argument(root: &Path, value: &str) -> String {
     }
 }
 
-/// One action the state machine may take: a `rule_*` handler on the test
-/// contract, or a state-changing function on a registered target.
+/// One action the state machine may take.
 struct Rule<'a> {
     /// Unique name the engine schedules by.
     name: String,
     /// What the counterexample calls it.
     display: String,
-    function: &'a Function,
-    target: Address,
-    /// Whether a revert is a rejected step rather than a failure. Forge's
-    /// invariant runner ignores reverts by default, and suites written for it
-    /// guard their handlers with `require`, so target rules follow that policy.
-    reverts_allowed: bool,
+    action: Action<'a>,
 }
+
+enum Action<'a> {
+    /// A `rule_*` handler on the test contract, or a state-changing function
+    /// on a registered target.
+    Call {
+        function: &'a Function,
+        target: Address,
+        /// Whether a revert is a rejected step rather than a failure. Forge's
+        /// invariant runner ignores reverts by default, and suites written for
+        /// it guard their handlers with `require`, so target rules follow that
+        /// policy.
+        reverts_allowed: bool,
+    },
+    /// The environment moving time forward by a drawn number of blocks, so
+    /// whether a block boundary separates two calls is the engine's choice and
+    /// shrinks like any other step.
+    AdvanceBlock { max_blocks: u64 },
+}
+
+/// Name of the step that advances the chain, kept out of any Solidity
+/// identifier's namespace by the dot.
+const ADVANCE_RULE: &str = "env.advance";
+/// Mainnet's slot time, so a skipped block moves the clock plausibly.
+pub const SECONDS_PER_BLOCK: u64 = 12;
 
 fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Vec<TestReport>> {
     let conventions = &options.conventions;
@@ -1055,9 +1140,11 @@ fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Ve
         .map(|function| Rule {
             name: function.name.clone(),
             display: function.name.clone(),
-            function,
-            target: prepared.address,
-            reverts_allowed: options.allow_rule_reverts,
+            action: Action::Call {
+                function,
+                target: prepared.address,
+                reverts_allowed: options.allow_rule_reverts,
+            },
         })
         .collect();
     for target in &prepared.targets {
@@ -1078,9 +1165,11 @@ fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Ve
             rules.push(Rule {
                 name: format!("{instance}.{}", function.signature()),
                 display: format!("{instance}.{}", function.name),
-                function,
-                target: target.address,
-                reverts_allowed: true,
+                action: Action::Call {
+                    function,
+                    target: target.address,
+                    reverts_allowed: true,
+                },
             });
         }
     }
@@ -1090,6 +1179,15 @@ fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Ve
              deploy and register target contracts in setUp()",
             contract.name
         );
+    }
+    if prepared.max_block_advance > 0 {
+        rules.push(Rule {
+            name: ADVANCE_RULE.into(),
+            display: ADVANCE_RULE.into(),
+            action: Action::AdvanceBlock {
+                max_blocks: prepared.max_block_advance,
+            },
+        });
     }
     let invariants: Vec<_> = contract.invariant_functions(conventions).collect();
     drive(test_name, options, |tc| {
@@ -1145,7 +1243,7 @@ fn execute_stateful_case(
     tc: &TestCase,
     options: &Options,
 ) -> Result<CaseExecution> {
-    let actors = options.actor_addresses();
+    let actors = &prepared.senders;
     let mut machine = Machine {
         db: prepared.base.clone(),
         inspector: new_inspector(tc, prepared.address, options),
@@ -1208,12 +1306,42 @@ fn execute_stateful_case(
             let rule = rules
                 .get(index)
                 .ok_or_else(|| anyhow!("Hegel selected unknown rule index {index}"))?;
-            let function = rule.function;
 
             // Span the whole call, including who made it, so the shrinker can
             // drop a step outright rather than only simplifying its arguments.
             tc.start_span(&format!("hegel.sol.rule.{}", rule.name))?;
-            let caller = match draw_actor(tc, &actors) {
+            let (function, target, reverts_allowed) = match rule.action {
+                Action::Call {
+                    function,
+                    target,
+                    reverts_allowed,
+                } => (function, target, reverts_allowed),
+                Action::AdvanceBlock { max_blocks } => {
+                    let blocks = match draw_integer(tc, 1, max_blocks as i64) {
+                        Ok(blocks) => blocks as u64,
+                        Err(status) => {
+                            let _ = tc.stop_span(true);
+                            return machine.finish(status, None, None);
+                        }
+                    };
+                    machine.trace.push(Draw {
+                        name: "blocks".into(),
+                        kind: "uint256".into(),
+                        value: blocks.to_string(),
+                    });
+                    machine.trace.push(Draw {
+                        name: rule.display.clone(),
+                        kind: "advance".into(),
+                        value: "()".into(),
+                    });
+                    machine
+                        .inspector
+                        .advance_block(blocks, blocks * SECONDS_PER_BLOCK);
+                    tc.stop_span(false)?;
+                    continue;
+                }
+            };
+            let caller = match draw_actor(tc, actors) {
                 Ok(caller) => caller,
                 Err(status) => {
                     let _ = tc.stop_span(true);
@@ -1245,7 +1373,7 @@ fn execute_stateful_case(
             });
 
             machine.inspector.outcome = None;
-            let result = machine.call(caller, rule.target, calldata)?;
+            let result = machine.call(caller, target, calldata)?;
             match machine.inspector.outcome.take() {
                 Some(Abort::Invalid) => {
                     tc.stop_span(true)?;
@@ -1266,7 +1394,7 @@ fn execute_stateful_case(
                 tc.stop_span(false)?;
                 continue;
             }
-            if rule.reverts_allowed {
+            if reverts_allowed {
                 // A handler that reverts left no state behind, so the step never
                 // happened: drop it and let the machine choose again rather than
                 // spending the budget on it.
@@ -1306,8 +1434,14 @@ fn draw_actor(tc: &TestCase, actors: &[Address]) -> std::result::Result<Address,
     if actors.len() <= 1 {
         return Ok(actors.first().copied().unwrap_or(evm::DEFAULT_CALLER));
     }
-    match tc.integer(0, actors.len() as i64 - 1) {
-        Ok(index) => Ok(actors[index as usize]),
+    draw_integer(tc, 0, actors.len() as i64 - 1).map(|index| actors[index as usize])
+}
+
+/// One engine draw outside any generated calldata, with its failure modes
+/// mapped to the example's status.
+fn draw_integer(tc: &TestCase, low: i64, high: i64) -> std::result::Result<i64, Status> {
+    match tc.integer(low, high) {
+        Ok(value) => Ok(value),
         Err(Error::Stop(_)) => Err(Status::Overrun),
         Err(_) => Err(Status::Invalid),
     }

@@ -19,6 +19,9 @@ pub struct Conventions {
     pub setup: String,
     /// Optional view returning a per-contract state-machine depth.
     pub step_count: String,
+    /// Optional view returning how many blocks the engine may skip at once
+    /// between stateful steps; zero or absent keeps time still.
+    pub max_block_advance: String,
 }
 
 impl Default for Conventions {
@@ -29,6 +32,7 @@ impl Default for Conventions {
             invariant: "invariant".into(),
             setup: "setUp".into(),
             step_count: "stepCount".into(),
+            max_block_advance: "maxBlockAdvance".into(),
         }
     }
 }
@@ -42,6 +46,12 @@ pub const STATEFUL_SUFFIX: &str = "stateful";
 /// listing contracts to leave alone.
 pub const TARGET_CONTRACTS: &str = "targetContracts";
 pub const EXCLUDE_CONTRACTS: &str = "excludeContracts";
+
+/// Forge's views listing the accounts handler calls may come from, and the
+/// ones to leave out. When neither is declared the runner's synthetic actors
+/// are used.
+pub const TARGET_SENDERS: &str = "targetSenders";
+pub const EXCLUDE_SENDERS: &str = "excludeSenders";
 
 /// DSTest's flag, read after a test that returned normally: a classic assertion
 /// records its failure here instead of reverting.

@@ -1,5 +1,5 @@
 use hegel_sol::runner::{Options, run_project};
-use tests_integration::{behaviour, examples, only, options, rules, status_name};
+use tests_integration::{behaviour, examples, only, options, rules, status_name, steps};
 
 /// Spanning each handler call lets the shrinker delete whole steps, not just
 /// simplify their arguments. Without that, a bug found deep in a long sequence
@@ -144,4 +144,127 @@ fn forge_style_targets_are_fuzzed_and_shrink_like_handlers() {
             "{contract}"
         );
     }
+}
+
+/// Whether a block boundary falls between two steps is part of the generated
+/// example, so a same-block guard can be tested without a hand-written time
+/// handler. A suite that never asked for it keeps a still clock.
+#[test]
+fn the_engine_advances_blocks_only_when_asked_and_moves_the_clock_with_them() {
+    let still = run_project(&Options {
+        test_cases: 50,
+        ..options(behaviour(), "BlockAdvanceTest")
+    })
+    .unwrap();
+    assert_eq!(status_name(&only(&still).status), "passed");
+
+    let moving = run_project(&Options {
+        test_cases: 50,
+        max_block_advance: 2,
+        ..options(behaviour(), "BlockAdvanceTest")
+    })
+    .unwrap();
+    let report = only(&moving);
+
+    assert!(moving.failed());
+    // A drifted clock fails the require with its own message instead.
+    let origin = report.origin.as_deref().unwrap_or_default();
+    assert!(
+        origin.starts_with("invariant_time_stands_still") && origin.ends_with("panic code 0x1"),
+        "{origin}"
+    );
+    assert_eq!(steps(report), ["env.advance"]);
+    // The one draw the step makes is how far to skip, shrunk to the minimum.
+    assert_eq!(
+        report
+            .trace
+            .iter()
+            .find(|draw| draw.name == "blocks")
+            .map(|draw| draw.value.as_str()),
+        Some("1")
+    );
+}
+
+/// Forge suites name the accounts their handlers are called from. The
+/// registered list replaces the synthetic actors, exclusions apply, and a
+/// prank the fixture left open changes the calls a test makes, never the
+/// transaction's own sender.
+#[test]
+fn registered_senders_replace_the_synthetic_actors() {
+    let execution = run_project(&Options {
+        test_cases: 50,
+        ..options(behaviour(), "TargetSendersTest")
+    })
+    .unwrap();
+    let report = only(&execution);
+
+    assert!(execution.failed(), "{:?}", report.origin);
+    let used: Vec<String> = tests_integration::senders(report)
+        .iter()
+        .map(|sender| sender.to_ascii_lowercase())
+        .collect();
+    let alice = "0x00000000000000000000000000000000000a11ce";
+    let bob = "0x0000000000000000000000000000000000000b0b";
+    assert!(
+        used.iter().all(|sender| sender == alice || sender == bob),
+        "{used:?}"
+    );
+    assert!(
+        used.iter().any(|sender| sender == alice) && used.iter().any(|sender| sender == bob),
+        "{used:?}"
+    );
+}
+
+/// The README's attack example: an attacker's options as handlers, the vault's
+/// solvency as the invariant, and the engine finding the manipulation without
+/// being told its shape.
+#[test]
+fn a_price_manipulation_shrinks_to_credit_swap_and_borrow() {
+    let execution = run_project(&Options {
+        test_cases: 300,
+        ..options(examples(), "PriceManipulationTest")
+    })
+    .unwrap();
+    let report = only(&execution);
+
+    assert!(execution.failed(), "{:?}", report.origin);
+    assert!(
+        report
+            .origin
+            .as_deref()
+            .is_some_and(|origin| origin.starts_with("invariant_loans_are_backed")),
+        "{:?}",
+        report.origin
+    );
+    // Capital, a swap to move the price, and a loan against the moved price:
+    // nothing shorter breaks the threshold, and repaying or swapping back is
+    // irrelevant to the vault's exposure.
+    assert_eq!(
+        steps(report),
+        ["rule_takeCredit", "rule_swapBForA", "rule_borrow"]
+    );
+}
+
+/// A same-block guard forces the manipulation to straddle a block. The engine
+/// decides where a block boundary falls, so the exploit is found with the
+/// boundary in the one place it has to be.
+#[test]
+fn a_same_block_guard_is_bypassed_by_a_block_the_engine_inserts() {
+    let execution = run_project(&Options {
+        test_cases: 300,
+        ..options(examples(), "SameBlockGuardTest")
+    })
+    .unwrap();
+    let report = only(&execution);
+
+    assert!(execution.failed(), "{:?}", report.origin);
+    assert_eq!(
+        steps(report),
+        [
+            "rule_takeCredit",
+            "rule_swapBForA",
+            "env.advance",
+            "rule_borrow"
+        ]
+    );
 }

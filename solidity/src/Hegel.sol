@@ -59,7 +59,8 @@ interface IHegel {
     /// @notice Attach diagnostic text to the current example.
     function note(string calldata text) external;
 
-    /// @notice Guide generation toward examples with larger scores.
+    /// @notice Guide generation toward examples with larger scores. Observing
+    /// more than once in an example, as an invariant does, keeps the largest.
     function target(int256 score) external;
 
     /// @notice Guide generation using a named score. Scores recorded under
@@ -93,6 +94,10 @@ interface IHegelVm {
     function warp(uint256 timestamp) external;
     /// @notice Set block.number.
     function roll(uint256 number) external;
+    /// @notice Read block.number, including a pending `roll`.
+    function getBlockNumber() external view returns (uint256);
+    /// @notice Read block.timestamp, including a pending `warp`.
+    function getBlockTimestamp() external view returns (uint256);
     /// @notice Require the next external call to revert.
     function expectRevert() external;
     /// @notice Require the next external call to revert with matching data.

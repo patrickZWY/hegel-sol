@@ -3,6 +3,36 @@
 User-visible changes, described against the latest release rather than commit by
 commit.
 
+## Unreleased
+
+### Features
+
+- The engine can move the chain forward between stateful steps. With
+  `--max-block-advance N`, or a `maxBlockAdvance()` view on the test contract, one of
+  the actions it may choose skips one to N blocks and twelve seconds each, so whether a
+  block boundary separates two handler calls is generated and shrunk like any argument.
+  The counterexample prints the skip as `vm.roll` and `vm.warp` lines, and the JSON
+  trace carries it as an `advance` entry. Off unless asked for.
+- Forge's `targetSenders()` and `excludeSenders()` are read: the registered accounts,
+  minus the excluded ones, replace the synthetic actors as the senders of handler
+  calls. A test that registers senders without `targetContracts()` is discovered as a
+  stateful test, as under Forge.
+- `vm.getBlockNumber()` and `vm.getBlockTimestamp()` are emulated and reflect `roll`
+  and `warp`.
+- `hegel.target` may be observed more than once per example, as an invariant checked
+  after every step does; the largest score under each label is what guides the search.
+  Previously a second observation aborted the run.
+- A worked attack-search example, `examples/test/PriceManipulation.t.sol`, shows a
+  flash-loan style price manipulation found from the vault's solvency invariant alone,
+  with and without a same-block guard. `cargo x demo` runs it as a fourth step.
+
+### Fixes
+
+- A `prank` or `startPrank` no longer applies to the transaction the runner itself
+  sends. Forge pranks the calls a test makes, never the test call, so a `startPrank`
+  left open by `setUp()` used to replace the sender the state machine had chosen for
+  every handler call.
+
 ## 0.2.0 - 2026-10-15
 
 ### Features

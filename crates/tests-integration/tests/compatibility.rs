@@ -183,3 +183,20 @@ fn a_recorded_dstest_failure_is_reported_with_its_logs() {
         ["log: Error: value == 7 not satisfied", "log:   Actual: 0"]
     );
 }
+
+/// Suites read the block back through the cheatcode interface as well as from
+/// the EVM, and the two must agree after `roll` and `warp`.
+#[test]
+fn block_reads_through_the_cheatcode_interface_follow_roll_and_warp() {
+    let execution = run_project(&Options {
+        test_cases: 1,
+        ..options(behaviour(), "BlockReadTest")
+    })
+    .unwrap();
+
+    assert!(
+        !execution.failed(),
+        "{:?}",
+        only(&execution).origin.as_deref()
+    );
+}

@@ -83,3 +83,16 @@ contract OverloadedTest {
         assert(value <= type(uint8).max);
     }
 }
+
+/// @notice `vm.getBlockNumber` and `vm.getBlockTimestamp` read back what `roll`
+/// and `warp` set, and agree with what the EVM reports.
+contract BlockReadTest is HegelTest {
+    function test_block_reads_follow_roll_and_warp() public {
+        vm.roll(77);
+        vm.warp(12_345);
+        assert(vm.getBlockNumber() == 77);
+        assert(vm.getBlockTimestamp() == 12_345);
+        assert(vm.getBlockNumber() == block.number);
+        assert(vm.getBlockTimestamp() == block.timestamp);
+    }
+}

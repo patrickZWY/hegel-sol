@@ -60,6 +60,8 @@ pub enum VmOp {
     Deal,
     Warp,
     Roll,
+    GetBlockNumber,
+    GetBlockTimestamp,
     ExpectRevertAny,
     ExpectRevertData,
     ExpectEmit,
@@ -297,6 +299,8 @@ static VM_SPECS: &[Spec<VmOp>] = &[
     ),
     spec!(VmOp::Warp, "warp(uint256)", "(uint256)", false),
     spec!(VmOp::Roll, "roll(uint256)", "(uint256)", false),
+    spec!(VmOp::GetBlockNumber, "getBlockNumber()", "()", false),
+    spec!(VmOp::GetBlockTimestamp, "getBlockTimestamp()", "()", false),
     spec!(VmOp::ExpectRevertAny, "expectRevert()", "()", false),
     spec!(
         VmOp::ExpectRevertData,

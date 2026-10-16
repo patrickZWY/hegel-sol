@@ -96,6 +96,7 @@ The options you will reach first; `hegel-sol test --help` lists the rest.
 | -------------------------------------- | ----------------------------------------------------------------- |
 | `--test-cases N`, `--seed N`           | Search budget per test, and a fixed seed.                         |
 | `--step-count N`, `--actors N`         | Handler calls per stateful case, and the accounts making them.    |
+| `--max-block-advance N`                | Let the engine skip up to N blocks between handler calls.         |
 | `--allow-rule-reverts`                 | Skip a reverting handler instead of failing, as Forge does.       |
 | `--jobs N`, `--shard K/N`              | Run tests concurrently, or run one stable partition of them.      |
 | `--fail-fast`, `--list`                | Stop at the first failure, or only print the selected tests.      |
@@ -105,11 +106,32 @@ The options you will reach first; `hegel-sol test --help` lists the rest.
 Failures found earlier replay first from the example database. Generation is guided by
 the basic blocks each example reaches; `--no-coverage-target` turns that off.
 
+## Searching for an attack
+
+A stateful test is a nondeterministic loop: each `rule_` function or registered target
+is an action, its arguments are chosen by the engine, and the invariant is checked
+between actions. That is enough to search for exploits rather than only for bugs.
+[`examples/test/PriceManipulation.t.sol`](examples/test/PriceManipulation.t.sol) is a
+worked case: a vault that prices collateral by an AMM's spot price, an attacker whose
+options are the handlers, and one invariant, that no loan exceeds the liquidation
+threshold at the honest price. Three habits make such a test work:
+
+- Assert the consequence, not the exploit's shape. The vault's solvency is the
+  invariant; the engine finds the sequence that breaks it.
+- Record the facts a pattern needs as contract state, such as the block of the last
+  swap, and let the invariant read them back.
+- Give the engine the environment too. `maxBlockAdvance()` on the contract, or
+  `--max-block-advance`, lets it insert block boundaries, which is how the example
+  gets past a same-block guard; `targetSenders()` names the accounts that act; and
+  `hegel.target(label, score)` steers the search toward larger damage.
+
 ## Foundry compatibility
 
 Supported cheatcodes: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`,
-`expectRevert`, `expectEmit`, `label`, `assume`, `addr`, `sign`, `store`, `load`, and the
-`assert*` family forge-std delegates to. Classic DSTest assertions, which record a
+`getBlockNumber`, `getBlockTimestamp`, `expectRevert`, `expectEmit`, `label`, `assume`,
+`addr`, `sign`, `store`, `load`, and the `assert*` family forge-std delegates to.
+Invariant tests may register `targetContracts()`, `excludeContracts()`,
+`targetSenders()`, and `excludeSenders()`. Classic DSTest assertions, which record a
 failure instead of reverting, are read back after the test together with their logged
 diagnostics. `console.log` output and custom errors are decoded, and test contracts are
 exempt from the code-size limit as in Forge. Forked state is not supported: this is a

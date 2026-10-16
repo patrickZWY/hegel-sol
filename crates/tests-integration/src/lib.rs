@@ -74,3 +74,24 @@ pub fn rules(report: &TestReport) -> Vec<&str> {
         .map(|draw| draw.name.as_str())
         .collect()
 }
+
+/// The steps of a reported stateful counterexample in order: a rule name, or
+/// `env.advance` for a block the engine skipped.
+pub fn steps(report: &TestReport) -> Vec<&str> {
+    report
+        .trace
+        .iter()
+        .filter(|draw| draw.kind == "rule" || draw.kind == "advance")
+        .map(|draw| draw.name.as_str())
+        .collect()
+}
+
+/// The accounts a reported counterexample made handler calls from, in order.
+pub fn senders(report: &TestReport) -> Vec<&str> {
+    report
+        .trace
+        .iter()
+        .filter(|draw| draw.kind == "sender")
+        .map(|draw| draw.value.as_str())
+        .collect()
+}

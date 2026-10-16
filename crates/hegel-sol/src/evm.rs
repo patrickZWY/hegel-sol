@@ -3,7 +3,7 @@ use revm::{
     Context, ExecuteCommitEvm, MainBuilder, MainContext,
     bytecode::Bytecode,
     context::{CfgEnv, TxEnv, result::ExecutionResult},
-    database::{CacheDB, EmptyDB},
+    database::{CacheDB, DatabaseRef, EmptyDB},
     primitives::{Address, Bytes, TxKind, U256},
     state::AccountInfo,
 };
@@ -27,15 +27,6 @@ impl Harness {
     /// each is funded so a call from one is never rejected for lack of balance.
     pub fn new(actors: &[Address]) -> Self {
         let mut db = Database::default();
-        for caller in std::iter::once(&DEFAULT_CALLER).chain(actors) {
-            db.insert_account_info(
-                *caller,
-                AccountInfo {
-                    balance: U256::MAX,
-                    ..Default::default()
-                },
-            );
-        }
         // Solidity checks that a call target has code before some external
         // calls, so the intercepted addresses need a non-empty account. The
         // inspector short-circuits every call to them, so this STOP never runs.
@@ -49,10 +40,33 @@ impl Harness {
                 AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from_static(&[0x00]))),
             );
         }
-        Self {
+        let mut harness = Self {
             db,
             caller: DEFAULT_CALLER,
             gas_limit: GAS_LIMIT,
+        };
+        harness.fund(std::iter::once(DEFAULT_CALLER).chain(actors.iter().copied()));
+        harness
+    }
+
+    /// Give accounts enough balance that a call from any of them is never
+    /// rejected for lack of funds. Senders a fixture registers only become known
+    /// after it has run, so this is separate from construction.
+    pub fn fund(&mut self, accounts: impl IntoIterator<Item = Address>) {
+        for account in accounts {
+            let info = self
+                .db
+                .basic_ref(account)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            self.db.insert_account_info(
+                account,
+                AccountInfo {
+                    balance: U256::MAX,
+                    ..info
+                },
+            );
         }
     }
 

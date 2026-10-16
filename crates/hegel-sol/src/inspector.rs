@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use alloy_dyn_abi::DynSolValue;
 use alloy_primitives::{Address, B256, I256, Log, U256};
@@ -77,8 +77,16 @@ pub struct HegelInspector<'a> {
     /// depth it was made from and its target.
     emit_check: Option<(usize, Address)>,
     labels: HashMap<Address, String>,
+    /// Best score observed under each `hegel.target` label. The engine accepts
+    /// one observation per label per example, while an invariant observes on
+    /// every check, so the runner keeps the maximum and reports it at the end.
+    targets: BTreeMap<String, f64>,
     timestamp: Option<U256>,
     block_number: Option<U256>,
+    /// Call depth of the transaction's own entry frame. Pranks apply to the
+    /// calls a test makes, never to the transaction itself, so a prank left
+    /// open by `setUp` must not replace the sender the runner chose.
+    entry_depth: Option<usize>,
     trace_target: Address,
     last_pc: Option<usize>,
     failure_pc: Option<usize>,
@@ -144,8 +152,10 @@ impl<'a> HegelInspector<'a> {
             expected_emits: Vec::new(),
             emit_check: None,
             labels: HashMap::new(),
+            targets: BTreeMap::new(),
             timestamp: None,
             block_number: None,
+            entry_depth: None,
             trace_target,
             last_pc: None,
             failure_pc: None,
@@ -160,15 +170,36 @@ impl<'a> HegelInspector<'a> {
         self
     }
 
+    /// The best score seen under each `hegel.target` label, for the engine.
+    pub fn targets(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.targets
+            .iter()
+            .map(|(label, score)| (label.as_str(), *score))
+    }
+
     /// Number of distinct basic blocks entered so far, or `None` when coverage
     /// collection is disabled.
     pub fn coverage_score(&self) -> Option<usize> {
         self.coverage.as_ref().map(HashSet::len)
     }
 
+    /// Forget what the previous transaction left behind: its source trace and
+    /// its entry depth.
     pub fn reset_source_trace(&mut self) {
         self.last_pc = None;
         self.failure_pc = None;
+        self.entry_depth = None;
+    }
+
+    /// Move the chain forward between stateful steps. The overrides persist for
+    /// the rest of the example, like a `roll` would, and start from revm's
+    /// default block when nothing set them.
+    pub fn advance_block(&mut self, blocks: u64, seconds: u64) {
+        let default = BlockEnv::default();
+        let number = self.block_number.unwrap_or(default.number);
+        let timestamp = self.timestamp.unwrap_or(default.timestamp);
+        self.block_number = Some(number + U256::from(blocks));
+        self.timestamp = Some(timestamp + U256::from(seconds));
     }
 
     pub fn source_pc(&self) -> Option<usize> {
@@ -310,10 +341,11 @@ impl<'a> HegelInspector<'a> {
                 // `target(int256)` carries no label of its own; give every such
                 // call the same one so their scores form a single objective.
                 let label = declared_name.unwrap_or("hegel.sol.target");
-                let score = arg_i256(args, 0)?;
-                self.tc
-                    .target(label, values::i256_as_f64(score))
-                    .map_err(map_engine)?;
+                let score = values::i256_as_f64(arg_i256(args, 0)?);
+                self.targets
+                    .entry(label.to_owned())
+                    .and_modify(|best| *best = best.max(score))
+                    .or_insert(score);
                 Ok(Bytes::new())
             }
             Op::RecordEvent => {
@@ -422,6 +454,18 @@ impl<'a> HegelInspector<'a> {
                 let value = arg_u256(args, 0)?;
                 ctx.block.number = value;
                 self.block_number = Some(value);
+            }
+            VmOp::GetBlockNumber => {
+                return Ok(VmOutcome::Return(encode(DynSolValue::Uint(
+                    ctx.block.number,
+                    256,
+                ))));
+            }
+            VmOp::GetBlockTimestamp => {
+                return Ok(VmOutcome::Return(encode(DynSolValue::Uint(
+                    ctx.block.timestamp,
+                    256,
+                ))));
             }
             VmOp::ExpectRevertAny => self.expected_revert = Some(None),
             VmOp::ExpectRevertData => self.expected_revert = Some(Some(arg_data(args, 0)?)),
@@ -644,7 +688,13 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
             };
             return Some(intercepted(inputs, instruction, output));
         }
-        if let Some(sender) = self.next_prank.take().or(self.persistent_prank) {
+        // revm reports the transaction's entry frame one deeper than zero, so the
+        // depth seen first is the baseline rather than a constant.
+        let depth = ctx.journaled_state.depth();
+        let entry_depth = *self.entry_depth.get_or_insert(depth);
+        if depth > entry_depth
+            && let Some(sender) = self.next_prank.take().or(self.persistent_prank)
+        {
             inputs.caller = sender;
         }
         if let Some(expected) = self.expected_revert.take() {
@@ -652,7 +702,6 @@ impl<DB: Database> Inspector<RevmContext<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB
         }
         // The first call made from the frame that declared event expectations is
         // the one whose events must satisfy them.
-        let depth = ctx.journaled_state.depth();
         if self.emit_check.is_none()
             && self
                 .expected_emits

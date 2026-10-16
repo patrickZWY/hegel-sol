@@ -9,7 +9,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use hegel_sol::{
     discovery::{Conventions, STATEFUL_SUFFIX},
     inspector::Draw,
-    runner::{Options, Shard, TestReport, TestStatus, list_project, run_project},
+    runner::{
+        Options, SECONDS_PER_BLOCK, Shard, TestReport, TestStatus, list_project, run_project,
+    },
 };
 use serde::Serialize;
 
@@ -105,6 +107,9 @@ struct TestArgs {
     /// Distinct accounts stateful handlers are called from.
     #[arg(long, default_value_t = 3)]
     actors: usize,
+    /// Most blocks a stateful step may skip at once; 0 keeps time still.
+    #[arg(long, default_value_t = 0)]
+    max_block_advance: u64,
     /// Treat a reverting stateful handler as a rejected step, matching Foundry's
     /// default invariant behaviour, instead of failing the test.
     #[arg(long)]
@@ -195,6 +200,7 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         max_byte_len: args.max_byte_len,
         fail_fast: args.fail_fast,
         actors: args.actors,
+        max_block_advance: args.max_block_advance,
         allow_rule_reverts: args.allow_rule_reverts,
         coverage_target: !args.no_coverage_target,
         conventions: Conventions {
@@ -319,6 +325,9 @@ fn reproduce_command(args: &TestArgs, report: &TestReport, blob: &str) -> String
     if args.actors != defaults.actors {
         push("actors", &args.actors.to_string());
     }
+    if args.max_block_advance != defaults.max_block_advance {
+        push("max-block-advance", &args.max_block_advance.to_string());
+    }
     if args.max_array_len != defaults.max_array_len {
         push("max-array-len", &args.max_array_len.to_string());
     }
@@ -379,6 +388,17 @@ fn print_counterexample(report: &TestReport) {
                     .collect::<Vec<_>>()
                     .join(", ");
                 println!("    {}({arguments});", draw.name);
+            }
+            "advance" => {
+                // The step's one draw is how many blocks the chain skipped.
+                let blocks = pending
+                    .drain(..)
+                    .next_back()
+                    .map_or_else(|| "1".to_owned(), |draw| draw.value.clone());
+                println!(
+                    "    vm.roll(block.number + {blocks}); vm.warp(block.timestamp + {blocks} * \
+                     {SECONDS_PER_BLOCK});"
+                );
             }
             _ => pending.push(draw),
         }

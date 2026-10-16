@@ -33,7 +33,9 @@ Each entry in `tests` always contains these fields:
   or `null` for one that always did.
 - `trace`: ordered generated draws and state-machine actions. A stateful step appears
   as its `sender` entry when the run has several actors, its argument draws, and then a
-  `rule` entry naming the handler they were passed to.
+  `rule` entry naming the handler they were passed to. A step in which the engine
+  advanced the chain appears as a `uint256` draw named `blocks` followed by an
+  `advance` entry; the clock moves twelve seconds per block.
 - `console`: ordered captured console messages.
 - `notes`: ordered text passed to `hegel.note`.
 - `duration_ms`: wall-clock duration for that test job.
