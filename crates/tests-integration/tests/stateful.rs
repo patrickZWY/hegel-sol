@@ -146,6 +146,51 @@ fn forge_style_targets_are_fuzzed_and_shrink_like_handlers() {
     }
 }
 
+/// Forge's selector registration can name a target without targetContracts(),
+/// and only its listed functions should enter the generated state machine.
+#[test]
+fn target_selectors_choose_the_functions_called_on_a_registered_target() {
+    let safe = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "SelectedSafeFunctionTest")
+    })
+    .unwrap();
+    assert_eq!(status_name(&only(&safe).status), "passed");
+
+    let callable = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "SelectedCallableFunctionTest")
+    })
+    .unwrap();
+    assert!(callable.failed());
+    assert_eq!(rules(only(&callable)), ["SelectorHandler.allowed"]);
+
+    let failing = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "SelectedFailingFunctionTest")
+    })
+    .unwrap();
+    let report = only(&failing);
+    assert!(failing.failed());
+    assert_eq!(rules(report), ["SelectorHandler.forbidden"]);
+}
+
+#[test]
+fn repeated_selector_registrations_combine_callable_functions() {
+    let execution = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "MergedSelectorRegistrationTest")
+    })
+    .unwrap();
+    assert!(execution.failed());
+    let mut calls = rules(only(&execution));
+    calls.sort_unstable();
+    assert_eq!(
+        calls,
+        ["SelectorHandler.allowed", "SelectorHandler.forbidden"]
+    );
+}
+
 /// Whether a block boundary falls between two steps is part of the generated
 /// example, so a same-block guard can be tested without a hand-written time
 /// handler. A suite that never asked for it keeps a still clock.

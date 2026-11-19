@@ -7,6 +7,9 @@ commit.
 
 ### Features
 
+- Forge-style invariant tests honor `targetSelectors()` registrations, including
+  tests that register selectors without declaring `targetContracts()`.
+
 - The engine can move the chain forward between stateful steps. With
   `--max-block-advance N`, or a `maxBlockAdvance()` view on the test contract, one of
   the actions it may choose skips one to N blocks and twelve seconds each, so whether a
@@ -27,6 +30,9 @@ commit.
   with and without a same-block guard. `cargo x demo` runs it as a fourth step.
 
 ### Fixes
+
+- Removed sources retained in old Foundry build metadata no longer produce spurious
+  missing-source warnings when they are absent from the current build cache.
 
 - A `prank` or `startPrank` no longer applies to the transaction the runner itself
   sends. Forge pranks the calls a test makes, never the test call, so a `startPrank`

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -20,7 +20,7 @@ use crate::{
     autodraw::Limits,
     discovery::{
         Conventions, EXCLUDE_CONTRACTS, EXCLUDE_SENDERS, FAILED_FLAG, STATEFUL_SUFFIX,
-        TARGET_CONTRACTS, TARGET_SENDERS,
+        TARGET_CONTRACTS, TARGET_SELECTORS, TARGET_SENDERS,
     },
     engine::{Context as HegelContext, Error, Settings, Status, TestCase},
     evm::{self, Database, Harness},
@@ -307,9 +307,10 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
 
         // A stateful test supplies its handlers either as `rule_*` functions or,
         // in Forge's style, as contracts it registers through `targetContracts()`
-        // or implicitly deploys while registering `targetSenders()`.
+        // or registers selectors or senders for its deployed targets.
         let has_rules = contract.rule_functions(conventions).next().is_some();
         let has_targets = contract.nullary(TARGET_CONTRACTS).is_some()
+            || contract.nullary(TARGET_SELECTORS).is_some()
             || contract.nullary(TARGET_SENDERS).is_some();
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
         if !has_invariants || !(has_rules || has_targets) {
@@ -418,6 +419,7 @@ struct Discovered<'a> {
 struct Target<'a> {
     contract: &'a Contract,
     address: Address,
+    selectors: Option<BTreeSet<[u8; 4]>>,
 }
 
 impl<'a> PreparedContract<'a> {
@@ -432,6 +434,7 @@ impl<'a> PreparedContract<'a> {
         let setup = contract.nullary(&conventions.setup).map(selector_calldata);
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
         let registers = contract.nullary(TARGET_CONTRACTS).is_some()
+            || contract.nullary(TARGET_SELECTORS).is_some()
             || contract.nullary(TARGET_SENDERS).is_some();
         let discovered = if has_invariants && registers {
             discover_targets(contract, contracts, &harness, address, setup.as_ref())?
@@ -533,6 +536,7 @@ fn discover_targets<'a>(
 
     let explicit = address_list(&mut probe, contract, address, TARGET_CONTRACTS)?;
     let excluded = address_list(&mut probe, contract, address, EXCLUDE_CONTRACTS)?;
+    let selectors = selector_list(&mut probe, contract, address)?;
 
     let mut targets = Vec::new();
     if explicit.is_empty() {
@@ -549,6 +553,7 @@ fn discover_targets<'a>(
                 targets.push(Target {
                     contract: found,
                     address: created,
+                    selectors: selectors.get(&created).cloned(),
                 });
             }
         }
@@ -572,10 +577,82 @@ fn discover_targets<'a>(
             targets.push(Target {
                 contract: found,
                 address: target,
+                selectors: selectors.get(&target).cloned(),
             });
         }
     }
+    for (selected, allowed) in selectors {
+        if excluded.contains(&selected) || targets.iter().any(|target| target.address == selected) {
+            continue;
+        }
+        let found = probe.code_at(selected).and_then(|code| {
+            contracts
+                .iter()
+                .find(|candidate| candidate.matches_deployed_code(&code))
+        });
+        let Some(found) = found else {
+            bail!(
+                "{}.{TARGET_SELECTORS}() names {selected}, which matches no contract compiled in this project",
+                contract.name
+            );
+        };
+        targets.push(Target {
+            contract: found,
+            address: selected,
+            selectors: Some(allowed),
+        });
+    }
     Ok(Discovered { targets, senders })
+}
+
+/// Decode Forge's `FuzzSelector[]`: `(address addr, bytes4[] selectors)[]`.
+fn selector_list(
+    probe: &mut Harness,
+    contract: &Contract,
+    address: Address,
+) -> Result<BTreeMap<Address, BTreeSet<[u8; 4]>>> {
+    let Some(function) = contract.nullary(TARGET_SELECTORS) else {
+        return Ok(BTreeMap::new());
+    };
+    let result = probe.call(address, selector_calldata(function))?;
+    if !result.is_success() {
+        return Ok(BTreeMap::new());
+    }
+    let output = result.output().unwrap_or_default();
+    let kind = DynSolType::Tuple(vec![DynSolType::Array(Box::new(DynSolType::Tuple(vec![
+        DynSolType::Address,
+        DynSolType::Array(Box::new(DynSolType::FixedBytes(4))),
+    ])))]);
+    let decoded = kind.abi_decode_params(output).with_context(|| {
+        format!(
+            "{}.{TARGET_SELECTORS}() did not return FuzzSelector[]",
+            contract.name
+        )
+    })?;
+    let DynSolValue::Tuple(mut values) = decoded else {
+        unreachable!("tuple decoder returned another shape")
+    };
+    let Some(DynSolValue::Array(entries)) = values.pop() else {
+        unreachable!("FuzzSelector decoder returned another shape")
+    };
+    let mut selected = BTreeMap::<Address, BTreeSet<[u8; 4]>>::new();
+    for entry in entries {
+        let DynSolValue::Tuple(fields) = entry else {
+            unreachable!("FuzzSelector decoder returned another shape")
+        };
+        let [DynSolValue::Address(target), DynSolValue::Array(functions)] = fields.as_slice()
+        else {
+            unreachable!("FuzzSelector decoder returned another shape")
+        };
+        let allowed = selected.entry(*target).or_default();
+        for function in functions {
+            let DynSolValue::FixedBytes(bytes, 4) = function else {
+                unreachable!("FuzzSelector decoder returned another shape")
+            };
+            allowed.insert(bytes[..4].try_into().expect("four selector bytes"));
+        }
+    }
+    Ok(selected)
 }
 
 /// Call a view returning `address[]`, treating a missing or reverting one as
@@ -1162,6 +1239,13 @@ fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Ve
             target.contract.name.clone()
         };
         for function in target.contract.mutating_functions() {
+            if target
+                .selectors
+                .as_ref()
+                .is_some_and(|selectors| !selectors.contains(function.selector().as_slice()))
+            {
+                continue;
+            }
             rules.push(Rule {
                 name: format!("{instance}.{}", function.signature()),
                 display: format!("{instance}.{}", function.name),

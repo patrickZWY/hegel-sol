@@ -412,6 +412,18 @@ block is still an exploit, only a dearer one. Forge's invariant mode cannot run 
 example as a baseline, because without `targetContracts()` it fuzzes every deployed
 contract including the token's `mint`, which is a different model, not a weaker search.
 
+### 2026-11-18: benign validation and selector registration
+
+New validation and benchmark work uses arithmetic boundaries, collections, token
+accounting, and deterministic replay. Existing attack-search demos remain available.
+Failing properties introduced for measurement must be identified as deliberately seeded
+correctness defects; they are not evidence of vulnerabilities in upstream contracts.
+
+Forge-style selector registrations restrict the functions generated for each target.
+A selector-only registration also makes the invariant suite discoverable. Historical
+build-info can still name removed sources, so missing-source warnings consult the current
+Foundry cache before treating those historical names as missing inputs.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
@@ -421,8 +433,7 @@ contract including the token's `mint`, which is a different model, not a weaker 
 - Antithesis: set `hegel_settings_set_test_location` per test and run under the
   `workload` profile.
 - Compatibility growth: extend cheatcodes, console overloads, forked-state support, and
-  environment controls when real suites require them. Forge's `targetSelectors` is not
-  read.
+  environment controls when real suites require them.
 - Richer histories: in-handler `hegel.draw*` entries land at the end of a stateful
   trace rather than inside their step, emitted events are not reported, and a bounded
   temporal property over the trace still has to be hand-rolled as contract state. A

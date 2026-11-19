@@ -7,7 +7,7 @@
 //! and nothing above this module does.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -185,6 +185,7 @@ pub fn load(root: &Path) -> Loaded {
     let files = artifact_files(root, &mut warnings);
     let mut contracts = Vec::new();
     let mut sources_by_build = BTreeMap::<String, Arc<SourceIndex>>::new();
+    let current_sources = cached_sources(root);
 
     for file in files {
         let Ok(text) = fs::read_to_string(&file.path) else {
@@ -220,7 +221,12 @@ pub fn load(root: &Path) -> Loaded {
                 let index = match sources_by_build.get(build_id) {
                     Some(sources) => Arc::clone(sources),
                     None => {
-                        let sources = Arc::new(load_sources(root, build_id, &mut warnings));
+                        let sources = Arc::new(load_sources(
+                            root,
+                            build_id,
+                            current_sources.as_ref(),
+                            &mut warnings,
+                        ));
                         sources_by_build.insert(build_id.clone(), Arc::clone(&sources));
                         sources
                     }
@@ -311,6 +317,12 @@ struct ArtifactFile {
 #[derive(Deserialize)]
 struct BuildInfo {
     source_id_to_path: BTreeMap<String, PathBuf>,
+}
+
+fn cached_sources(root: &Path) -> Option<BTreeSet<PathBuf>> {
+    let text = fs::read_to_string(root.join("cache/solidity-files-cache.json")).ok()?;
+    let cache = serde_json::from_str::<ArtifactCache>(&text).ok()?;
+    Some(cache.files.into_keys().map(PathBuf::from).collect())
 }
 
 /// Artifacts belonging to the current build.
@@ -422,7 +434,12 @@ fn collect_artifact_paths(value: &serde_json::Value, paths: &mut Vec<(String, Op
 
 /// Sources of one compilation. Debug information is optional, so a missing or
 /// unreadable file costs source positions for that file alone.
-fn load_sources(root: &Path, build_id: &str, warnings: &mut Vec<String>) -> SourceIndex {
+fn load_sources(
+    root: &Path,
+    build_id: &str,
+    current_sources: Option<&BTreeSet<PathBuf>>,
+    warnings: &mut Vec<String>,
+) -> SourceIndex {
     let path = root.join("out/build-info").join(format!("{build_id}.json"));
     let info = match fs::read_to_string(&path)
         .map_err(anyhow::Error::from)
@@ -453,11 +470,18 @@ fn load_sources(root: &Path, build_id: &str, warnings: &mut Vec<String>) -> Sour
                     },
                 );
             }
-            Err(error) => warnings.push(format!(
-                "could not read Solidity source {} ({error}); failures inside it will be \
-                 reported without a line number",
-                relative.display()
-            )),
+            Err(error) => {
+                // Foundry can retain a build-info file after its source has
+                // disappeared from the current cache. That source cannot be
+                // reached by a current artifact, so it needs no warning.
+                if current_sources.is_none_or(|paths| paths.contains(&relative)) {
+                    warnings.push(format!(
+                        "could not read Solidity source {} ({error}); failures inside it will be \
+                         reported without a line number",
+                        relative.display()
+                    ));
+                }
+            }
         }
     }
     sources
@@ -561,10 +585,27 @@ mod tests {
         let dir = TempDir::new("nosources");
         let mut warnings = Vec::new();
 
-        let sources = load_sources(&dir.0, "missing", &mut warnings);
+        let sources = load_sources(&dir.0, "missing", None, &mut warnings);
 
         assert!(sources.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("without a source location"));
+    }
+
+    #[test]
+    fn stale_build_info_sources_do_not_warn_but_current_missing_sources_do() {
+        let dir = TempDir::new("stale-build-info");
+        dir.write(
+            "out/build-info/abc.json",
+            r#"{"source_id_to_path":{"0":"test/Current.t.sol","1":"test/Removed.t.sol"}}"#,
+        );
+        let current = BTreeSet::from([PathBuf::from("test/Current.t.sol")]);
+        let mut warnings = Vec::new();
+
+        let sources = load_sources(&dir.0, "abc", Some(&current), &mut warnings);
+
+        assert!(sources.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("test/Current.t.sol"));
     }
 }

@@ -46,6 +46,8 @@ pub const STATEFUL_SUFFIX: &str = "stateful";
 /// listing contracts to leave alone.
 pub const TARGET_CONTRACTS: &str = "targetContracts";
 pub const EXCLUDE_CONTRACTS: &str = "excludeContracts";
+/// Forge's view selecting callable functions by contract address and selector.
+pub const TARGET_SELECTORS: &str = "targetSelectors";
 
 /// Forge's views listing the accounts handler calls may come from, and the
 /// ones to leave out. When neither is declared the runner's synthetic actors

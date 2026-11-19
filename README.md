@@ -131,8 +131,10 @@ Supported cheatcodes: `prank`, `startPrank`, `stopPrank`, `deal`, `warp`, `roll`
 `getBlockNumber`, `getBlockTimestamp`, `expectRevert`, `expectEmit`, `label`, `assume`,
 `addr`, `sign`, `store`, `load`, and the `assert*` family forge-std delegates to.
 Invariant tests may register `targetContracts()`, `excludeContracts()`,
-`targetSenders()`, and `excludeSenders()`. Classic DSTest assertions, which record a
-failure instead of reverting, are read back after the test together with their logged
+`targetSenders()`, `excludeSenders()`, and `targetSelectors()`. Selector registrations
+restrict the callable functions on each named target; repeated registrations combine their
+selectors. Selector registrations also work without `targetContracts()`. Classic DSTest
+assertions, which record a failure instead of reverting, are read back with their logged
 diagnostics. `console.log` output and custom errors are decoded, and test contracts are
 exempt from the code-size limit as in Forge. Forked state is not supported: this is a
 standalone runner, not a Foundry fork. Solady's own ERC20 suite and invariant, and
