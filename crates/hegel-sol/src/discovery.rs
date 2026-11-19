@@ -6,7 +6,7 @@
 //! the conventions a single place to change.
 
 /// Prefixes identifying each kind of function the runner looks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Conventions {
     /// Stateless property tests, run once per generated example.
     pub test: String,

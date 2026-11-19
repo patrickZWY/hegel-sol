@@ -15,6 +15,7 @@ use hegel_sol::{
 };
 use serde::Serialize;
 
+mod archive;
 mod report_sections;
 
 const JSON_SCHEMA_VERSION: u32 = 1;
@@ -80,6 +81,9 @@ struct TestArgs {
     verbosity: Verbosity,
     #[arg(long)]
     json: bool,
+    /// Save a run in a new directory, relative to the current working directory.
+    #[arg(long, conflicts_with = "list")]
+    output_dir: Option<PathBuf>,
     /// List selected tests without deploying or executing them.
     #[arg(long)]
     list: bool,
@@ -224,17 +228,38 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         return Ok(false);
     }
 
+    let mut archive = args
+        .output_dir
+        .as_deref()
+        .map(|directory| archive::Archive::create(directory, &options))
+        .transpose()?;
     let started = Instant::now();
-    let execution = run_project(&options)?;
+    let execution = match run_project(&options) {
+        Ok(execution) => execution,
+        Err(error) => {
+            if let Some(archive) = &mut archive
+                && let Err(write_error) =
+                    archive.record_error(&error, started.elapsed().as_millis())
+            {
+                return Err(error.context(format!(
+                    "also failed to archive the run error: {write_error:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     let elapsed_ms = started.elapsed().as_millis();
+    let report = JsonReport {
+        schema_version: JSON_SCHEMA_VERSION,
+        elapsed_ms,
+        summary: summarize(&execution.reports),
+        warnings: &execution.warnings,
+        tests: &execution.reports,
+    };
+    if let Some(archive) = &mut archive {
+        archive.complete(&report, &args)?;
+    }
     if args.json {
-        let report = JsonReport {
-            schema_version: JSON_SCHEMA_VERSION,
-            elapsed_ms,
-            summary: summarize(&execution.reports),
-            warnings: &execution.warnings,
-            tests: &execution.reports,
-        };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         for warning in &execution.warnings {
@@ -309,7 +334,7 @@ fn print_reports(reports: &[TestReport], args: &TestArgs) {
 /// search, such as the seed or the case budget, are left out.
 fn reproduce_command(args: &TestArgs, report: &TestReport, blob: &str) -> String {
     let mut command = vec![
-        format!("HEGEL_SOL_REPRODUCE={blob}"),
+        format!("HEGEL_SOL_REPRODUCE={}", shell_quote(blob)),
         "hegel-sol".to_owned(),
         "test".to_owned(),
     ];
@@ -350,6 +375,9 @@ fn reproduce_command(args: &TestArgs, report: &TestReport, blob: &str) -> String
     }
     if args.invariant_prefix != defaults.conventions.invariant {
         push("invariant-prefix", &args.invariant_prefix);
+    }
+    if let Some(profile) = &args.profile {
+        push("profile", profile);
     }
     if args.allow_rule_reverts {
         command.push("--allow-rule-reverts".to_owned());
@@ -680,11 +708,14 @@ mod tests {
             "--allow-rule-reverts",
             "--seed",
             "7",
+            "--profile",
+            "ci",
         ]);
         let command = reproduce_command(&args, &populated_report(), "blob");
         assert!(command.contains("--root 'my project'"), "{command}");
         assert!(command.contains("--actors 5"), "{command}");
         assert!(command.contains("--allow-rule-reverts"), "{command}");
+        assert!(command.contains("--profile ci"), "{command}");
         assert!(!command.contains("--seed"), "{command}");
     }
 

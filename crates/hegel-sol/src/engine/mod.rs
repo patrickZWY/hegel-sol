@@ -81,6 +81,22 @@ impl Context {
         )))
     }
 
+    /// Version of the linked engine, for archived run provenance.
+    pub fn version(&self) -> Result<String> {
+        let mut version = ptr::null();
+        // SAFETY: the context and out pointer are valid; the returned string is static.
+        self.check(unsafe { hegel_c::hegel_version(self.raw(), &mut version) })?;
+        if version.is_null() {
+            return Err(Error::Engine(
+                "libhegel returned a null version string".into(),
+            ));
+        }
+        // SAFETY: a successful version call returns a static, NUL-terminated string.
+        Ok(unsafe { CStr::from_ptr(version) }
+            .to_string_lossy()
+            .into_owned())
+    }
+
     fn raw(&self) -> *mut HegelContext {
         self.0.0.as_ptr()
     }

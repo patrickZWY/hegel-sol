@@ -128,6 +128,16 @@ handler returning normally does not by itself establish a state change. JSON rep
 always include these statistics and diagnostics. See [the reporting contract][reporting]
 for exact definitions.
 
+Keep a run for later inspection or CI artifacts with a new output directory:
+
+```sh
+hegel-sol test --output-dir .hegel/runs/local-001
+```
+
+The [run archive](docs/archives.md) includes versions, configuration, the full JSON
+report, and failure replay information. Existing directories are never overwritten;
+check `manifest.json` for completion or a saved run error.
+
 ## Searching for an attack
 
 A stateful test is a nondeterministic loop: each `rule_` function or registered target

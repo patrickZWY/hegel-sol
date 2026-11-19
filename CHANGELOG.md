@@ -7,6 +7,12 @@ commit.
 
 ### Features
 
+- `--output-dir DIR` saves a versioned run archive with runner and engine versions,
+  runner options, the full JSON report, and numbered failure artifacts with replay
+  commands. Existing directories are refused. A manifest distinguishes complete
+  reports, fatal run errors, and interrupted writes. Replay commands retain the
+  original working directory and selected engine profile.
+
 - Reports include execution counts and per-handler activity, with diagnostics for
   unexercised handlers and excessive input rejection. `--show-statistics` now shows
   these sections for passing and failing tests, alongside counterexample events.
@@ -45,6 +51,9 @@ commit.
   with and without a same-block guard. `cargo x demo` runs it as a fourth step.
 
 ### Fixes
+
+- Printed replay commands retain `--profile`, so replay uses the same engine
+  profile as the run that found the failure.
 
 - Repeating an address in `targetContracts()` no longer adds duplicate handler
   actions or labels a single target as multiple instances in counterexamples.

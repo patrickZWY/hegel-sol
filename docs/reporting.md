@@ -114,3 +114,9 @@ applicable diagnostics. As before, a fatal run error does not emit a JSON report
 
 This is an additive schema-version-1 extension: existing fields, status semantics, and
 counterexample event counts retain their meaning.
+
+## Saving reports
+
+`--output-dir DIR` writes this same report to `report.json` in a new
+[run archive](archives.md), even without `--json`. Archive layout and completion state
+use a separate manifest version; the execution-report schema remains version 1.

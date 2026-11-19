@@ -44,7 +44,7 @@ const COVERAGE_LABEL: &str = "hegel.sol.coverage";
 /// was set: the assertion's own diagnostics are in the captured logs.
 const RECORDED_FAILURE: &str = "assertion failed without reverting; see the logged diagnostics";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Options {
     pub root: PathBuf,
     pub match_contract: Option<String>,
@@ -129,7 +129,7 @@ impl Options {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Shard {
     index: usize,
     total: usize,

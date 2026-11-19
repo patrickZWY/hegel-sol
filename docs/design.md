@@ -486,6 +486,21 @@ unique inputs or generation-only samples. Normal handler returns are observable;
 business transitions are not inferred. Engine run errors stay fatal and carry additional
 accounting context. New report fields are additive under schema version 1.
 
+### 2026-11-18: manifest-based run archives
+
+The CLI owns [archive writing](../crates/hegel-sol/src/archive.rs), keeping filesystem
+publication out of the execution runner. A new output directory is reserved before
+execution; existing directories and final-path symlinks are refused. Artifacts use
+exclusive file creation, and the manifest is committed by rename only after the files
+have been written and synced. An interrupted write remains incomplete instead of being
+mistaken for a successful report. Fatal run errors retain their semantics and get a
+separate error artifact.
+
+The archive stores explicit runner inputs, linked engine and runner versions, and
+failure replay data; it is not a source or environment snapshot. Replay commands retain
+the invocation directory and engine profile. The [archive format](archives.md) has its
+own version, independent of the unchanged JSON report schema.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
