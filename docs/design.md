@@ -452,6 +452,23 @@ Repeated addresses must not duplicate state-machine actions or make a single dep
 appear as multiple instances in reports. Selector registrations continue to union their
 selectors by address, and contract exclusions apply to both registration paths.
 
+### 2026-11-18: named choices and a private registration boundary
+
+The public [Solidity helpers](../solidity/src/Hegel.sol) select entries through existing
+bounded integer draws. Candidate order defines shrinking order; `pickOther` filters all
+occurrences of the excluded address while retaining other duplicates. Named empty
+choices revert before drawing, and selected primitive values are attached through the
+existing notes channel. Domain generators remain ordinary Solidity functions and
+structs. No selector, wire semantics, or report schema changes are required, so the
+protocol stays at version 1. [Choice documentation](choices.md) specifies the replay,
+empty-state, and array-copying tradeoffs.
+
+[Registration](../crates/hegel-sol/src/runner/registration.rs) is now a private runner
+module owning target and sender probing, per-contract settings, and protocol checks.
+Only the parent runner can access its entry points and discovered state. Scheduling,
+generated execution, and reporting stay in the parent; no public adapter trait is added.
+The move preserves the registration logic and existing fallback policies.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently

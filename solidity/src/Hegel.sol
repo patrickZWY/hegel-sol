@@ -133,6 +133,81 @@ abstract contract HegelTest {
     IHegel internal constant hegel = IHegel(HEGEL);
     IHegelVm internal constant vm = IHegelVm(HEVM);
 
+    /// @notice A named choice has no eligible candidates. Populate the collection
+    /// or guard a stateful handler's precondition before making the choice.
+    error HegelEmptyChoice(string name);
+
+    /// @notice Pick an index in [0, length). Use this to select your own structs.
+    /// @dev The trace records `name.index`; shrinking prefers earlier entries.
+    /// An empty collection fails with HegelEmptyChoice instead of rejecting a case.
+    function pickIndex(string memory name, uint256 length) internal returns (uint256) {
+        if (length == 0) revert HegelEmptyChoice(name);
+        return hegel.drawUint256(string.concat(name, ".index"), 0, length - 1);
+    }
+
+    /// @notice Pick an address and attach its value to the failure's notes.
+    /// @dev Candidates keep their order. Duplicates are separate selectable entries;
+    /// zero is a valid candidate. Keep construction deterministic for replay.
+    function pick(string memory name, address[] memory candidates) internal returns (address value) {
+        value = candidates[pickIndex(name, candidates.length)];
+        hegel.note(string.concat(name, " = ", _choiceAddress(value)));
+    }
+
+    /// @notice Pick an integer, for example an ID created by an earlier handler.
+    /// @dev As with address choices, order controls shrinking and duplicates remain.
+    function pick(string memory name, uint256[] memory candidates) internal returns (uint256 value) {
+        value = candidates[pickIndex(name, candidates.length)];
+        hegel.note(string.concat(name, " = ", _choiceUint(value)));
+    }
+
+    /// @notice Pick an address different from excluded without discarding examples.
+    /// @dev Every occurrence of excluded is removed from consideration. Remaining
+    /// entries keep their order; an empty result fails with HegelEmptyChoice(name).
+    function pickOther(string memory name, address[] memory candidates, address excluded) internal returns (address) {
+        uint256 eligible;
+        for (uint256 i; i < candidates.length; i++) {
+            if (candidates[i] != excluded) eligible++;
+        }
+        uint256 index = pickIndex(name, eligible);
+        for (uint256 i; i < candidates.length; i++) {
+            if (candidates[i] == excluded) continue;
+            if (index == 0) {
+                hegel.note(string.concat(name, " = ", _choiceAddress(candidates[i])));
+                return candidates[i];
+            }
+            index--;
+        }
+        // The same array supplied the eligible count and the selected entry.
+        assert(false);
+        return address(0);
+    }
+
+    function _choiceAddress(address value) private pure returns (string memory) {
+        bytes16 digits = "0123456789abcdef";
+        bytes memory text = new bytes(42);
+        text[0] = "0";
+        text[1] = "x";
+        uint160 remaining = uint160(value);
+        for (uint256 i = 42; i > 2;) {
+            text[--i] = digits[remaining & 15];
+            remaining >>= 4;
+        }
+        return string(text);
+    }
+
+    function _choiceUint(uint256 value) private pure returns (string memory) {
+        uint256 length = 1;
+        for (uint256 remaining = value; remaining >= 10; remaining /= 10) {
+            length++;
+        }
+        bytes memory text = new bytes(length);
+        do {
+            text[--length] = bytes1(uint8(48 + value % 10));
+            value /= 10;
+        } while (length > 0);
+        return string(text);
+    }
+
     /// @notice Protocol version this test was compiled against.
     /// @dev The runner calls this before executing anything so a mismatched copy
     /// of Hegel.sol is reported by name instead of as an unknown selector.

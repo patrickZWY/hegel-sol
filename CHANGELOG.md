@@ -7,6 +7,13 @@ commit.
 
 ### Features
 
+- `HegelTest` provides named `pick` helpers for address and integer arrays,
+  `pickOther` for distinct accounts, and `pickIndex` for custom collections.
+  Choices shrink toward earlier candidates, include selected values in failure
+  notes, and diagnose empty inputs with `HegelEmptyChoice(name)`. Copy the updated
+  `Hegel.sol` to use them; the runner protocol is unchanged. Transfer, constrained
+  order, and stateful object examples show how to compose generators in Solidity.
+
 - Forge-style invariant tests honor `targetSelectors()` registrations, including
   tests that register selectors without declaring `targetContracts()`.
 

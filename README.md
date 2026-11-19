@@ -47,6 +47,20 @@ contract TokenTest is HegelTest {
 `hegel` also draws signed integers, booleans, bytes, and strings, and provides spans,
 notes, targets, events, and pools. The NatSpec in `Hegel.sol` is the full reference.
 
+For inputs constrained by your fixture, `HegelTest` provides named choices:
+
+```solidity
+address from = pick("from", actors);
+address to = pickOther("to", actors, from);
+uint256 amount = hegel.drawUint256("amount", 0, token.balanceOf(from));
+```
+
+`pick` accepts address or integer arrays; `pickIndex` selects from your own struct
+collections. Choices shrink toward earlier candidates and record the selected values
+in failure notes. Empty choices report `HegelEmptyChoice` with the choice name.
+[Choosing useful inputs](docs/choices.md) explains constraints, composition, and replay,
+with [runnable transfer, order, and stateful examples](examples/test/Choices.t.sol).
+
 For a stateful test, write handlers named `rule_*` and properties named `invariant*`.
 The runner calls handlers in generated sequences from several accounts, checks the
 invariants along the way, and shrinks a failure to the shortest sequence that causes it.
