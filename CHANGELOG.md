@@ -7,6 +7,14 @@ commit.
 
 ### Features
 
+- Reports include execution counts and per-handler activity, with diagnostics for
+  unexercised handlers and excessive input rejection. `--show-statistics` now shows
+  these sections for passing and failing tests, alongside counterexample events.
+  JSON adds `statistics` and `diagnostics` to each test under schema version 1;
+  counters include shrinking and replay, and are repeated for multiple failures of
+  the same test. Engine run errors retain their failure behavior and now include
+  execution counts and diagnostic advice.
+
 - `HegelTest` provides named `pick` helpers for address and integer arrays,
   `pickOther` for distinct accounts, and `pickIndex` for custom collections.
   Choices shrink toward earlier candidates, include selected values in failure

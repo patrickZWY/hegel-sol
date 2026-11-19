@@ -469,6 +469,23 @@ Only the parent runner can access its entry points and discovered state. Schedul
 generated execution, and reporting stay in the parent; no public adapter trait is added.
 The move preserves the registration logic and existing fallback policies.
 
+### 2026-11-18: execution accounting and report sections
+
+Inspired by the separation of run statistics and test artifacts in
+[KLEE's tools](https://klee-se.org/docs/tools/), accounting and presentation have distinct
+owners. The runner records execution outcomes; its private
+[statistics module](../crates/hegel-sol/src/runner/statistics.rs) aggregates counts and
+produces structured diagnostics. The CLI's
+[section renderer](../crates/hegel-sol/src/report_sections.rs) presents execution and
+handler sections independently of counterexample events. JSON exposes the same data.
+
+The pinned engine API can print generation-event statistics, but the runner does not
+have a structured phase-specific statistics accessor. Its counters therefore explicitly
+cover all observed executions, including shrinking and replay. They must not be called
+unique inputs or generation-only samples. Normal handler returns are observable; useful
+business transitions are not inferred. Engine run errors stay fatal and carry additional
+accounting context. New report fields are additive under schema version 1.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently

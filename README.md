@@ -120,6 +120,14 @@ The options you will reach first; `hegel-sol test --help` lists the rest.
 Failures found earlier replay first from the example database. Generation is guided by
 the basic blocks each example reaches; `--no-coverage-target` turns that off.
 
+To check whether a test exercised its intended actions, use `--show-statistics`.
+The report separates execution counts, handler outcomes, and counterexample events.
+Diagnostics identify handlers that never completed and runs that discarded most inputs,
+with suggestions for improving generation. Counts include shrinking and replay; a
+handler returning normally does not by itself establish a state change. JSON reports
+always include these statistics and diagnostics. See [the reporting contract][reporting]
+for exact definitions.
+
 ## Searching for an attack
 
 A stateful test is a nondeterministic loop: each `rule_` function or registered target

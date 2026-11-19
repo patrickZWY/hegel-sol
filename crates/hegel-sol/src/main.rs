@@ -15,6 +15,8 @@ use hegel_sol::{
 };
 use serde::Serialize;
 
+mod report_sections;
+
 const JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Serialize)]
@@ -89,7 +91,7 @@ struct TestArgs {
     show_timings: bool,
     #[arg(long, default_value_t = 50)]
     step_count: i64,
-    /// Summarise recorded events for reported failures.
+    /// Show execution counts, handler activity, and events from reported failures.
     #[arg(long)]
     show_statistics: bool,
     /// Number of Solidity tests to execute concurrently.
@@ -283,12 +285,18 @@ fn print_reports(reports: &[TestReport], args: &TestArgs) {
                     println!("  note: {note}");
                 }
                 if args.show_statistics {
-                    print_statistics(report);
+                    print_events(report);
                 }
                 if let Some(blob) = &report.blob {
                     println!("  reproduce: {}", reproduce_command(args, report, blob));
                 }
             }
+        }
+        if args.show_statistics {
+            println!("{}", report_sections::statistics(&report.statistics));
+        }
+        if !report.diagnostics.is_empty() {
+            println!("{}", report_sections::diagnostics(&report.diagnostics));
         }
     }
 }
@@ -408,12 +416,12 @@ fn print_counterexample(report: &TestReport) {
     }
 }
 
-fn print_statistics(report: &TestReport) {
+fn print_events(report: &TestReport) {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
     for event in report.trace.iter().filter(|draw| draw.kind == "event") {
         *counts.entry(&event.name).or_default() += 1;
     }
-    println!("  statistics (reported example only):");
+    println!("  events (reported example only):");
     if counts.is_empty() {
         println!("    no events recorded");
     } else {
@@ -519,6 +527,14 @@ mod tests {
             console: vec!["console.log: hi".into()],
             notes: vec!["a note".into()],
             duration_ms: 4,
+            statistics: hegel_sol::runner::RunStatistics {
+                handlers: [("deposit".into(), Default::default())].into(),
+                ..Default::default()
+            },
+            diagnostics: vec![hegel_sol::runner::Diagnostic {
+                code: "handler_not_called",
+                message: "deposit was never called".into(),
+            }],
         }
     }
 
@@ -556,11 +572,32 @@ mod tests {
             "console",
             "notes",
             "duration_ms",
+            "statistics",
+            "diagnostics",
         ];
         for field in documented {
             assert!(test.contains_key(field), "tests[].{field} is missing");
         }
         assert_eq!(test["status"], "failed");
+        for count in ["executed", "valid", "rejected", "overrun", "failed"] {
+            assert!(test["statistics"]["examples"][count].is_number());
+        }
+        assert!(test["statistics"]["handlers"].is_object());
+        assert!(test["statistics"]["invariant_checks"].is_number());
+        assert!(test["statistics"]["block_advances"].is_number());
+        assert!(test["diagnostics"].is_array());
+        for count in [
+            "calls",
+            "completed",
+            "rejected",
+            "skipped_revert",
+            "failed",
+            "overrun",
+        ] {
+            assert!(test["statistics"]["handlers"]["deposit"][count].is_number());
+        }
+        assert!(test["diagnostics"][0]["code"].is_string());
+        assert!(test["diagnostics"][0]["message"].is_string());
         for coordinate in ["path", "line", "column"] {
             assert!(
                 test["source"][coordinate].is_number() || test["source"][coordinate].is_string()

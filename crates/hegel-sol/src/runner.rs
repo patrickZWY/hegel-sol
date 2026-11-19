@@ -26,6 +26,10 @@ use crate::{
 };
 
 mod registration;
+mod statistics;
+
+use statistics::HandlerOutcome;
+pub use statistics::{Diagnostic, ExampleStatistics, HandlerStatistics, RunStatistics};
 
 use registration::{
     Discovered, Target, check_protocol_version, discover_targets, has_target_registration,
@@ -178,6 +182,9 @@ pub struct TestReport {
     pub console: Vec<String>,
     pub notes: Vec<String>,
     pub duration_ms: u64,
+    /// Aggregate execution counts across all phases of this test job.
+    pub statistics: RunStatistics,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Everything one invocation produced.
@@ -220,6 +227,8 @@ impl TestReport {
             console: Vec::new(),
             notes: Vec::new(),
             duration_ms: 0,
+            statistics: RunStatistics::default(),
+            diagnostics: Vec::new(),
         }
     }
 }
@@ -613,9 +622,11 @@ fn drive(
     };
     let mut captured: BTreeMap<String, CaseExecution> = BTreeMap::new();
     let mut last = None;
+    let mut statistics = RunStatistics::default();
     while let Some(mut tc) = run.next_test_case()? {
         let capture = tc.should_capture()?;
         let execution = execute(&tc)?;
+        statistics.observe(execution.status, &execution.statistics);
         tc.mark_complete(execution.status, execution.origin.as_deref())?;
         if capture && execution.status == Status::Interesting {
             captured.insert(execution.origin.clone().unwrap_or_default(), execution);
@@ -625,7 +636,10 @@ fn drive(
     }
     let result = run.result()?;
     if let Some(error) = result.error()? {
-        bail!("Hegel run failed: {error}");
+        bail!(
+            "{test_name}: Hegel run failed: {error}\n{}",
+            statistics.error_context()
+        );
     }
 
     let mut reports = Vec::new();
@@ -645,6 +659,7 @@ fn drive(
                 Some(blob) => {
                     let mut tc = settings.test_case_from_blob(blob)?;
                     let execution = execute(&tc)?;
+                    statistics.observe(execution.status, &execution.statistics);
                     tc.mark_complete(execution.status, execution.origin.as_deref())?;
                     execution
                 }
@@ -666,6 +681,11 @@ fn drive(
             _ => TestReport::empty(test_name, TestStatus::Passed, None),
         });
     }
+    let diagnostics = statistics.diagnostics();
+    for report in &mut reports {
+        report.statistics = statistics.clone();
+        report.diagnostics = diagnostics.clone();
+    }
     Ok(reports)
 }
 
@@ -682,6 +702,7 @@ fn run_test(
 }
 
 struct CaseExecution {
+    statistics: RunStatistics,
     console: Vec<String>,
     notes: Vec<String>,
     status: Status,
@@ -703,6 +724,8 @@ impl CaseExecution {
             caveat,
             trace: self.trace,
             duration_ms: 0,
+            statistics: RunStatistics::default(),
+            diagnostics: Vec::new(),
         }
     }
 }
@@ -780,6 +803,7 @@ fn execute_case(
     report_coverage(tc, &inspector)?;
     auto_trace.extend(inspector.trace);
     Ok(CaseExecution {
+        statistics: RunStatistics::default(),
         console: inspector.console,
         notes: inspector.notes,
         status,
@@ -791,6 +815,7 @@ fn execute_case(
 
 fn aborted(status: Status) -> CaseExecution {
     CaseExecution {
+        statistics: RunStatistics::default(),
         console: Vec::new(),
         notes: Vec::new(),
         status,
@@ -1019,6 +1044,7 @@ fn run_stateful(prepared: &PreparedContract<'_>, options: &Options) -> Result<Ve
 /// State carried across one stateful example: the database, the inspector, and
 /// the trace built up as rules run.
 struct Machine<'a, 'tc> {
+    statistics: RunStatistics,
     db: Database,
     inspector: HegelInspector<'tc>,
     trace: Vec<Draw>,
@@ -1047,6 +1073,7 @@ impl Machine<'_, '_> {
         report_coverage(self.tc, &self.inspector)?;
         self.trace.append(&mut self.inspector.trace);
         Ok(CaseExecution {
+            statistics: self.statistics,
             console: self.inspector.console,
             notes: self.inspector.notes,
             status,
@@ -1066,6 +1093,14 @@ fn execute_stateful_case(
 ) -> Result<CaseExecution> {
     let actors = &prepared.senders;
     let mut machine = Machine {
+        statistics: RunStatistics {
+            handlers: rules
+                .iter()
+                .filter(|rule| matches!(rule.action, Action::Call { .. }))
+                .map(|rule| (rule.name.clone(), HandlerStatistics::default()))
+                .collect(),
+            ..RunStatistics::default()
+        },
         db: prepared.base.clone(),
         inspector: new_inspector(tc, prepared.address, options),
         trace: Vec::new(),
@@ -1076,7 +1111,8 @@ fn execute_stateful_case(
 
     if let Some(setup) = &prepared.setup {
         let result = machine.call(evm::DEFAULT_CALLER, prepared.address, setup.clone())?;
-        if let Some(execution) = setup_failure(&mut machine.inspector, result, prepared)? {
+        if let Some(mut execution) = setup_failure(&mut machine.inspector, result, prepared)? {
+            execution.statistics = machine.statistics;
             return Ok(execution);
         }
     }
@@ -1158,6 +1194,7 @@ fn execute_stateful_case(
                     machine
                         .inspector
                         .advance_block(blocks, blocks * SECONDS_PER_BLOCK);
+                    machine.statistics.block_advances += 1;
                     tc.stop_span(false)?;
                     continue;
                 }
@@ -1197,11 +1234,17 @@ fn execute_stateful_case(
             let result = machine.call(caller, target, calldata)?;
             match machine.inspector.outcome.take() {
                 Some(Abort::Invalid) => {
+                    machine
+                        .statistics
+                        .handler(&rule.name, HandlerOutcome::Rejected);
                     tc.stop_span(true)?;
                     sm.rule_rejected(tc, 0)?;
                     continue;
                 }
                 Some(Abort::Overrun) => {
+                    machine
+                        .statistics
+                        .handler(&rule.name, HandlerOutcome::Overrun);
                     let _ = tc.stop_span(true);
                     return machine.finish(Status::Overrun, None, None);
                 }
@@ -1212,10 +1255,16 @@ fn execute_stateful_case(
             let (status, origin, source) =
                 classify(result, prepared.contract, &mut machine.inspector);
             if status == Status::Valid {
+                machine
+                    .statistics
+                    .handler(&rule.name, HandlerOutcome::Completed);
                 tc.stop_span(false)?;
                 continue;
             }
             if reverts_allowed {
+                machine
+                    .statistics
+                    .handler(&rule.name, HandlerOutcome::SkippedRevert);
                 // A handler that reverts left no state behind, so the step never
                 // happened: drop it and let the machine choose again rather than
                 // spending the budget on it.
@@ -1223,6 +1272,9 @@ fn execute_stateful_case(
                 sm.rule_rejected(tc, 0)?;
                 continue;
             }
+            machine
+                .statistics
+                .handler(&rule.name, HandlerOutcome::Failed);
             tc.stop_span(false)?;
             return machine.finish(
                 status,
@@ -1280,6 +1332,7 @@ fn check_invariants(
             Err(status) => return Ok(Some(take_case(machine, status, None, None)?)),
         };
         machine.trace.extend(drawn);
+        machine.statistics.invariant_checks += 1;
         let result = machine.call(evm::DEFAULT_CALLER, machine.prepared.address, calldata)?;
         let label = phase.map_or_else(
             || function.name.clone(),
@@ -1328,6 +1381,7 @@ fn take_case(
     report_coverage(machine.tc, &machine.inspector)?;
     machine.trace.append(&mut machine.inspector.trace);
     Ok(CaseExecution {
+        statistics: std::mem::take(&mut machine.statistics),
         console: std::mem::take(&mut machine.inspector.console),
         notes: std::mem::take(&mut machine.inspector.notes),
         status,
