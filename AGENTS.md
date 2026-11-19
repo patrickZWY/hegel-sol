@@ -3,6 +3,17 @@
 Conventions for contributors and coding agents. `README.md` is the user's entry point;
 this file is the maintainer's.
 
+## Maintenance direction
+
+Maintain this project independently. Local requirements and validation determine the
+roadmap; keeping pace with an upstream repository is not a goal. Do not fetch, merge,
+rebase onto, or submit changes to an upstream repository unless the user requests it.
+Evaluate dependency updates and external patches on their merits for this project.
+Preserve dependency licenses and source attribution.
+
+Repository moves and publication destinations must use an address supplied or confirmed
+by the maintainer. A local commit does not imply a push or release.
+
 ## Workflows
 
 Use `cargo x` for every build, test, lint, and formatting command, and read
