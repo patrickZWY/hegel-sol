@@ -191,6 +191,37 @@ fn repeated_selector_registrations_combine_callable_functions() {
     );
 }
 
+#[test]
+fn empty_selector_registrations_leave_deployed_targets_callable() {
+    let execution = run_project(&Options {
+        test_cases: 20,
+        ..options(behaviour(), "EmptySelectorRegistrationTest")
+    })
+    .unwrap();
+    assert!(execution.failed());
+    assert_eq!(rules(only(&execution)), ["SelectorHandler.forbidden"]);
+}
+
+#[test]
+fn duplicate_target_registrations_report_one_contract_instance() {
+    for contract in [
+        "RepeatedAddressRegistrationTest",
+        "DuplicateSelectorTargetTest",
+    ] {
+        let execution = run_project(&Options {
+            test_cases: 20,
+            ..options(behaviour(), contract)
+        })
+        .unwrap();
+        assert!(execution.failed(), "{contract}");
+        assert_eq!(
+            rules(only(&execution)),
+            ["SelectorHandler.allowed"],
+            "{contract}"
+        );
+    }
+}
+
 /// Whether a block boundary falls between two steps is part of the generated
 /// example, so a same-block guard can be tested without a hand-written time
 /// handler. A suite that never asked for it keeps a still clock.

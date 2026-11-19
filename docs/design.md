@@ -445,6 +445,13 @@ budgets and hegel-sol property options, while workload selection remains explici
 each call site. Forge invariant budgets stay separate because they use environment
 variables rather than fuzz command flags. Command order and arguments are preserved.
 
+### 2026-11-18: target registration identity
+
+Explicit targets are unique by deployed address, preserving first registration order.
+Repeated addresses must not duplicate state-machine actions or make a single deployment
+appear as multiple instances in reports. Selector registrations continue to union their
+selectors by address, and contract exclusions apply to both registration paths.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently

@@ -35,3 +35,44 @@ fn a_contract_built_against_another_protocol_version_is_refused_before_running()
     assert!(error.contains("protocol version 99"), "{error}");
     assert!(error.contains("Hegel.sol"), "{error}");
 }
+
+#[test]
+fn an_empty_target_selector_set_leaves_no_callable_actions() {
+    let contract = "EmptyTargetSelectorsTest";
+    let error = run_project(&options(broken(), contract))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(contract), "{error}");
+    assert!(error.contains("nothing to call between them"), "{error}");
+}
+
+#[test]
+fn excluded_contracts_cannot_be_added_back_by_selector_registrations() {
+    for contract in ["ExcludedSelectorTargetTest", "ExcludedExplicitTargetTest"] {
+        let error = run_project(&options(broken(), contract))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(contract), "{error}");
+        assert!(error.contains("nothing to call between them"), "{error}");
+    }
+}
+
+#[test]
+fn malformed_registration_results_name_the_view_and_expected_type() {
+    for (contract, expected) in [
+        (
+            "MalformedSelectorsTest",
+            "targetSelectors() did not return FuzzSelector[]",
+        ),
+        (
+            "MalformedTargetsTest",
+            "targetContracts() did not return address[]",
+        ),
+    ] {
+        let error = run_project(&options(broken(), contract))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(contract), "{error}");
+        assert!(error.contains(expected), "{error}");
+    }
+}

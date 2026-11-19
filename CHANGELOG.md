@@ -31,6 +31,10 @@ commit.
 
 ### Fixes
 
+- Repeating an address in `targetContracts()` no longer adds duplicate handler
+  actions or labels a single target as multiple instances in counterexamples.
+  Targets keep their first registration order.
+
 - Removed sources retained in old Foundry build metadata no longer produce spurious
   missing-source warnings when they are absent from the current build cache.
 

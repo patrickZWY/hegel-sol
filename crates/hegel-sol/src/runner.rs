@@ -562,7 +562,7 @@ fn discover_targets<'a>(
         }
     } else {
         for target in explicit {
-            if excluded.contains(&target) {
+            if excluded.contains(&target) || targets.iter().any(|found| found.address == target) {
                 continue;
             }
             let found = registered_target(&probe, contracts, contract, target, TARGET_CONTRACTS)?;

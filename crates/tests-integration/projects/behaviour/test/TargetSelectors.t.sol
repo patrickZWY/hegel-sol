@@ -74,3 +74,32 @@ contract MergedSelectorRegistrationTest is SelectedSafeFunctionTest {
         assert(handler.calls() == 0 || !handler.forbiddenCalled());
     }
 }
+
+/// @notice An empty registration list leaves deployed targets unrestricted.
+contract EmptySelectorRegistrationTest is SelectedSafeFunctionTest {
+    function targetSelectors() public pure override returns (FuzzSelector[] memory selected) {
+        selected = new FuzzSelector[](0);
+    }
+}
+
+/// @notice Repeated explicit target addresses represent one callable instance.
+contract RepeatedAddressRegistrationTest is SelectedCallableFunctionTest {
+    function targetContracts() public view returns (address[] memory targets) {
+        targets = new address[](2);
+        targets[0] = address(handler);
+        targets[1] = address(handler);
+    }
+}
+
+/// @notice Repeated selector entries for one target represent one callable instance.
+contract DuplicateSelectorTargetTest is SelectedCallableFunctionTest {
+    function targetSelectors() public view override returns (FuzzSelector[] memory selected) {
+        selected = new FuzzSelector[](2);
+        for (uint256 i; i < selected.length; i++) {
+            selected[i].addr = address(handler);
+            selected[i].selectors = new bytes4[](2);
+            selected[i].selectors[0] = SelectorHandler.allowed.selector;
+            selected[i].selectors[1] = SelectorHandler.allowed.selector;
+        }
+    }
+}
