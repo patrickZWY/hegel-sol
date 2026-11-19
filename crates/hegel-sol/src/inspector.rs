@@ -790,17 +790,15 @@ fn failed_assertion(
     signature: &str,
     args: &[DynSolValue],
 ) -> Result<Option<String>, Abort> {
-    let mut args = args.to_vec();
-    let message = match args.last() {
-        Some(DynSolValue::String(_)) => match args.pop() {
-            Some(DynSolValue::String(text)) => Some(text),
-            _ => None,
-        },
-        _ => None,
+    let (args, message) = match args.split_last() {
+        Some((DynSolValue::String(message), values)) => (values, Some(message)),
+        _ => (args, None),
     };
-    if signature.contains("Decimal") {
-        args.pop();
-    }
+    let args = if signature.contains("Decimal") {
+        &args[..args.len().saturating_sub(1)]
+    } else {
+        args
+    };
     let value = |index: usize| args.get(index).map(format_value).unwrap_or_default();
     let numeric = |index: usize| -> Result<I256, Abort> {
         match args.get(index) {
@@ -813,8 +811,8 @@ fn failed_assertion(
         }
     };
     let failure = match assertion {
-        Assertion::True => (!arg_bool(&args, 0)?).then(|| "assertion failed".to_owned()),
-        Assertion::False => arg_bool(&args, 0)?.then(|| "assertion failed".to_owned()),
+        Assertion::True => (!arg_bool(args, 0)?).then(|| "assertion failed".to_owned()),
+        Assertion::False => arg_bool(args, 0)?.then(|| "assertion failed".to_owned()),
         Assertion::Eq => {
             (args.first() != args.get(1)).then(|| format!("{} != {}", value(0), value(1)))
         }
@@ -833,7 +831,7 @@ fn failed_assertion(
         }
         Assertion::ApproxEqAbs => {
             let (left, right) = (numeric(0)?, numeric(1)?);
-            let max_delta = arg_u256(&args, 2)?;
+            let max_delta = arg_u256(args, 2)?;
             let delta = absolute_difference(left, right);
             (delta > max_delta).then(|| {
                 format!(
@@ -845,7 +843,7 @@ fn failed_assertion(
         }
         Assertion::ApproxEqRel => {
             let (left, right) = (numeric(0)?, numeric(1)?);
-            let max_percent = arg_u256(&args, 2)?;
+            let max_percent = arg_u256(args, 2)?;
             // Forge expresses the bound as a fraction of `right` scaled by 1e18,
             // and a zero reference requires exact equality.
             let delta = absolute_difference(left, right);

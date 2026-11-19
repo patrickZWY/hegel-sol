@@ -182,10 +182,17 @@ fn build(root: &Path) -> Result<()> {
 /// Load contracts from an already-built project.
 pub fn load(root: &Path) -> Loaded {
     let mut warnings = Vec::new();
-    let files = artifact_files(root, &mut warnings);
+    let cache = read_cache(root);
+    let files = artifact_files(root, &cache, &mut warnings);
     let mut contracts = Vec::new();
     let mut sources_by_build = BTreeMap::<String, Arc<SourceIndex>>::new();
-    let current_sources = cached_sources(root);
+    let current_sources = cache.as_ref().ok().map(|cache| {
+        cache
+            .files
+            .keys()
+            .map(PathBuf::from)
+            .collect::<BTreeSet<_>>()
+    });
 
     for file in files {
         let Ok(text) = fs::read_to_string(&file.path) else {
@@ -319,10 +326,11 @@ struct BuildInfo {
     source_id_to_path: BTreeMap<String, PathBuf>,
 }
 
-fn cached_sources(root: &Path) -> Option<BTreeSet<PathBuf>> {
-    let text = fs::read_to_string(root.join("cache/solidity-files-cache.json")).ok()?;
-    let cache = serde_json::from_str::<ArtifactCache>(&text).ok()?;
-    Some(cache.files.into_keys().map(PathBuf::from).collect())
+fn read_cache(root: &Path) -> Result<ArtifactCache> {
+    let cache_path = root.join("cache/solidity-files-cache.json");
+    let text = fs::read_to_string(&cache_path)
+        .with_context(|| format!("failed to read {}", cache_path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("failed to parse {}", cache_path.display()))
 }
 
 /// Artifacts belonging to the current build.
@@ -334,8 +342,15 @@ fn cached_sources(root: &Path) -> Option<BTreeSet<PathBuf>> {
 /// scanning the artifact directory. That fallback can resurrect stale artifacts,
 /// which is why it warns — but it keeps the runner working across a Foundry
 /// release that changes the cache format.
-fn artifact_files(root: &Path, warnings: &mut Vec<String>) -> Vec<ArtifactFile> {
-    match cached_artifact_files(root) {
+fn artifact_files(
+    root: &Path,
+    cache: &Result<ArtifactCache>,
+    warnings: &mut Vec<String>,
+) -> Vec<ArtifactFile> {
+    match cache
+        .as_ref()
+        .map(|cache| cached_artifact_files(root, cache))
+    {
         Ok(files) if !files.is_empty() => files,
         Ok(_) => {
             warnings.push(
@@ -355,12 +370,7 @@ fn artifact_files(root: &Path, warnings: &mut Vec<String>) -> Vec<ArtifactFile> 
     }
 }
 
-fn cached_artifact_files(root: &Path) -> Result<Vec<ArtifactFile>> {
-    let cache_path = root.join("cache/solidity-files-cache.json");
-    let text = fs::read_to_string(&cache_path)
-        .with_context(|| format!("failed to read {}", cache_path.display()))?;
-    let cache: ArtifactCache = serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse {}", cache_path.display()))?;
+fn cached_artifact_files(root: &Path, cache: &ArtifactCache) -> Vec<ArtifactFile> {
     let artifact_root = root.join(&cache.paths.artifacts);
     let mut relative_paths = Vec::new();
     for source in cache.files.values() {
@@ -370,13 +380,13 @@ fn cached_artifact_files(root: &Path) -> Result<Vec<ArtifactFile>> {
     }
     relative_paths.sort_by(|a, b| a.0.cmp(&b.0));
     relative_paths.dedup_by(|a, b| a.0 == b.0);
-    Ok(relative_paths
+    relative_paths
         .into_iter()
         .map(|(path, build_id)| ArtifactFile {
             path: artifact_root.join(path),
             build_id,
         })
-        .collect())
+        .collect()
 }
 
 /// Walk the artifact tree directly. Used only when the cache is unreadable, so
@@ -544,7 +554,7 @@ mod tests {
         dir.write("out/Current.t.sol/RenamedAway.json", "{}");
 
         let mut warnings = Vec::new();
-        let files = artifact_files(&dir.0, &mut warnings);
+        let files = artifact_files(&dir.0, &read_cache(&dir.0), &mut warnings);
 
         assert_eq!(
             files,
@@ -566,7 +576,7 @@ mod tests {
         dir.write("out/build-info/abc.json", "{}");
 
         let mut warnings = Vec::new();
-        let files = artifact_files(&dir.0, &mut warnings);
+        let files = artifact_files(&dir.0, &read_cache(&dir.0), &mut warnings);
 
         assert_eq!(
             files,

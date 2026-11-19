@@ -309,9 +309,7 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
         // in Forge's style, as contracts it registers through `targetContracts()`
         // or registers selectors or senders for its deployed targets.
         let has_rules = contract.rule_functions(conventions).next().is_some();
-        let has_targets = contract.nullary(TARGET_CONTRACTS).is_some()
-            || contract.nullary(TARGET_SELECTORS).is_some()
-            || contract.nullary(TARGET_SENDERS).is_some();
+        let has_targets = has_target_registration(contract);
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
         if !has_invariants || !(has_rules || has_targets) {
             continue;
@@ -332,6 +330,13 @@ fn discover_tests<'a>(contracts: &'a [Contract], options: &'a Options) -> Vec<Di
         }
     }
     jobs
+}
+
+// Discovery and preparation must agree on which suites register external targets.
+fn has_target_registration(contract: &Contract) -> bool {
+    [TARGET_CONTRACTS, TARGET_SELECTORS, TARGET_SENDERS]
+        .iter()
+        .any(|name| contract.nullary(name).is_some())
 }
 
 /// How a stateless test is named in reports and selected by `--match-test`.
@@ -433,9 +438,7 @@ impl<'a> PreparedContract<'a> {
 
         let setup = contract.nullary(&conventions.setup).map(selector_calldata);
         let has_invariants = contract.invariant_functions(conventions).next().is_some();
-        let registers = contract.nullary(TARGET_CONTRACTS).is_some()
-            || contract.nullary(TARGET_SELECTORS).is_some()
-            || contract.nullary(TARGET_SENDERS).is_some();
+        let registers = has_target_registration(contract);
         let discovered = if has_invariants && registers {
             discover_targets(contract, contracts, &harness, address, setup.as_ref())?
         } else {
@@ -562,18 +565,7 @@ fn discover_targets<'a>(
             if excluded.contains(&target) {
                 continue;
             }
-            let found = probe.code_at(target).and_then(|code| {
-                contracts
-                    .iter()
-                    .find(|candidate| candidate.matches_deployed_code(&code))
-            });
-            let Some(found) = found else {
-                bail!(
-                    "{}.{TARGET_CONTRACTS}() names {target}, which matches no contract compiled \
-                     in this project",
-                    contract.name
-                );
-            };
+            let found = registered_target(&probe, contracts, contract, target, TARGET_CONTRACTS)?;
             targets.push(Target {
                 contract: found,
                 address: target,
@@ -585,17 +577,7 @@ fn discover_targets<'a>(
         if excluded.contains(&selected) || targets.iter().any(|target| target.address == selected) {
             continue;
         }
-        let found = probe.code_at(selected).and_then(|code| {
-            contracts
-                .iter()
-                .find(|candidate| candidate.matches_deployed_code(&code))
-        });
-        let Some(found) = found else {
-            bail!(
-                "{}.{TARGET_SELECTORS}() names {selected}, which matches no contract compiled in this project",
-                contract.name
-            );
-        };
+        let found = registered_target(&probe, contracts, contract, selected, TARGET_SELECTORS)?;
         targets.push(Target {
             contract: found,
             address: selected,
@@ -605,36 +587,70 @@ fn discover_targets<'a>(
     Ok(Discovered { targets, senders })
 }
 
+// Explicit registrations must resolve to an ABI; implicit deployments may be skipped.
+fn registered_target<'a>(
+    probe: &Harness,
+    contracts: &'a [Contract],
+    fixture: &Contract,
+    address: Address,
+    registration: &str,
+) -> Result<&'a Contract> {
+    probe
+        .code_at(address)
+        .and_then(|code| contracts.iter().find(|candidate| candidate.matches_deployed_code(&code)))
+        .with_context(|| format!(
+            "{}.{registration}() names {address}, which matches no contract compiled in this project",
+            fixture.name
+        ))
+}
+
+/// Registration views may be absent or revert when nothing was registered.
+/// Successful calls must return the expected array, even if the ABI declares otherwise.
+fn registration_list(
+    probe: &mut Harness,
+    contract: &Contract,
+    address: Address,
+    name: &str,
+    element: DynSolType,
+    expected: &str,
+) -> Result<Vec<DynSolValue>> {
+    let Some(function) = contract.nullary(name) else {
+        return Ok(Vec::new());
+    };
+    let result = probe.call(address, selector_calldata(function))?;
+    if !result.is_success() {
+        return Ok(Vec::new());
+    }
+    let kind = DynSolType::Tuple(vec![DynSolType::Array(Box::new(element))]);
+    let decoded = kind
+        .abi_decode_params(result.output().unwrap_or_default())
+        .with_context(|| format!("{}.{name}() did not return {expected}", contract.name))?;
+    let DynSolValue::Tuple(mut values) = decoded else {
+        unreachable!("tuple decoder returned another shape")
+    };
+    let Some(DynSolValue::Array(items)) = values.pop() else {
+        unreachable!("array decoder returned another shape")
+    };
+    Ok(items)
+}
+
 /// Decode Forge's `FuzzSelector[]`: `(address addr, bytes4[] selectors)[]`.
 fn selector_list(
     probe: &mut Harness,
     contract: &Contract,
     address: Address,
 ) -> Result<BTreeMap<Address, BTreeSet<[u8; 4]>>> {
-    let Some(function) = contract.nullary(TARGET_SELECTORS) else {
-        return Ok(BTreeMap::new());
-    };
-    let result = probe.call(address, selector_calldata(function))?;
-    if !result.is_success() {
-        return Ok(BTreeMap::new());
-    }
-    let output = result.output().unwrap_or_default();
-    let kind = DynSolType::Tuple(vec![DynSolType::Array(Box::new(DynSolType::Tuple(vec![
-        DynSolType::Address,
-        DynSolType::Array(Box::new(DynSolType::FixedBytes(4))),
-    ])))]);
-    let decoded = kind.abi_decode_params(output).with_context(|| {
-        format!(
-            "{}.{TARGET_SELECTORS}() did not return FuzzSelector[]",
-            contract.name
-        )
-    })?;
-    let DynSolValue::Tuple(mut values) = decoded else {
-        unreachable!("tuple decoder returned another shape")
-    };
-    let Some(DynSolValue::Array(entries)) = values.pop() else {
-        unreachable!("FuzzSelector decoder returned another shape")
-    };
+    let entries = registration_list(
+        probe,
+        contract,
+        address,
+        TARGET_SELECTORS,
+        DynSolType::Tuple(vec![
+            DynSolType::Address,
+            DynSolType::Array(Box::new(DynSolType::FixedBytes(4))),
+        ]),
+        "FuzzSelector[]",
+    )?;
     let mut selected = BTreeMap::<Address, BTreeSet<[u8; 4]>>::new();
     for entry in entries {
         let DynSolValue::Tuple(fields) = entry else {
@@ -663,26 +679,14 @@ fn address_list(
     address: Address,
     name: &str,
 ) -> Result<Vec<Address>> {
-    let Some(function) = contract.nullary(name) else {
-        return Ok(Vec::new());
-    };
-    let result = probe.call(address, selector_calldata(function))?;
-    if !result.is_success() {
-        return Ok(Vec::new());
-    }
-    let output = result
-        .output()
-        .map(|output| output.to_vec())
-        .unwrap_or_default();
-    let list = DynSolType::Tuple(vec![DynSolType::Array(Box::new(DynSolType::Address))])
-        .abi_decode_params(&output)
-        .with_context(|| format!("{}.{name}() did not return address[]", contract.name))?;
-    let DynSolValue::Tuple(values) = list else {
-        return Ok(Vec::new());
-    };
-    let Some(DynSolValue::Array(items)) = values.into_iter().next() else {
-        return Ok(Vec::new());
-    };
+    let items = registration_list(
+        probe,
+        contract,
+        address,
+        name,
+        DynSolType::Address,
+        "address[]",
+    )?;
     Ok(items
         .into_iter()
         .filter_map(|item| match item {

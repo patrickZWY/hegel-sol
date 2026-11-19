@@ -424,6 +424,27 @@ A selector-only registration also makes the invariant suite discoverable. Histor
 build-info can still name removed sources, so missing-source warnings consult the current
 Foundry cache before treating those historical names as missing inputs.
 
+### 2026-11-18: shared registration and cache handling
+
+The [runner](../crates/hegel-sol/src/runner.rs) shares registration detection between
+suite discovery and preparation, and uses one array-view decoder for address and
+selector registrations. Explicit target lookup shares error handling while implicit
+unmatched deployments remain skippable. These helpers preserve registration order,
+selector merging, and the existing missing-view and revert policies.
+
+The [artifact loader](../crates/hegel-sol/src/artifacts.rs) parses the Foundry cache
+once per load. Artifact selection and missing-source warnings use that same snapshot;
+cache failures retain the existing directory-scan fallback. These are private helpers,
+not new public adapter interfaces.
+
+### 2026-11-18: workflow command reuse
+
+The [workflow runner](../crates/xtask/src/main.rs) shares release-binary preparation
+across benchmarks, validation, and profiling. Validation commands share Forge fuzz
+budgets and hegel-sol property options, while workload selection remains explicit at
+each call site. Forge invariant budgets stay separate because they use environment
+variables rather than fuzz command flags. Command order and arguments are preserved.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently

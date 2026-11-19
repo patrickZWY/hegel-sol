@@ -297,8 +297,7 @@ fn demo() -> Result<()> {
 }
 
 fn bench(args: Bench) -> Result<()> {
-    run(cargo(["build", "--release", "--locked", "-p", "hegel-sol"]))?;
-    let runner = workspace().join("target/release/hegel-sol");
+    let runner = release_runner()?;
     let stateless_cases = args.stateless_cases.to_string();
     let stateful_cases = args.stateful_cases.to_string();
     let stateful_steps = args.stateful_steps.to_string();
@@ -348,10 +347,10 @@ fn bench(args: Bench) -> Result<()> {
 
 const REAL_WORLD_ROOT: &str = "crates/tests-integration/projects/real-world";
 const SOLADY_ROOT: &str = "crates/tests-integration/projects/real-world/solady";
+const UNISWAP_ROOT: &str = "crates/tests-integration/projects/real-world/uniswap-v2";
 
 fn validate(args: Validate) -> Result<()> {
-    run(cargo(["build", "--release", "--locked", "-p", "hegel-sol"]))?;
-    let runner = workspace().join("target/release/hegel-sol");
+    let runner = release_runner()?;
     let stateless_cases = args.stateless_cases.to_string();
     let stateful_cases = args.stateful_cases.to_string();
     let stateful_steps = args.stateful_steps.to_string();
@@ -365,96 +364,54 @@ fn validate(args: Validate) -> Result<()> {
         let stateful_contract = format!("{prefix}StatefulTest");
 
         section(&format!("{name}: Forge stateless baseline"));
-        let mut baseline = Command::new("forge");
-        baseline.args([
-            "test",
-            "--root",
+        run(forge_fuzz_cmd(
             root,
-            "--match-contract",
-            &stateless_contract,
-            "--fuzz-runs",
+            &["--match-contract", &stateless_contract],
             &stateless_cases,
-            "--fuzz-seed",
             &seed,
-        ]);
-        baseline.current_dir(workspace());
-        run(baseline)?;
+        ))?;
 
         section(&format!("{name}: hegel-sol stateless property"));
-        run(runner_cmd(
+        run(property_cmd(
             &runner,
-            [
-                "--root",
-                root,
-                "--match-contract",
-                &stateless_contract,
-                "--test-cases",
-                &stateless_cases,
-                "--seed",
-                &seed,
-                "--database",
-                "off",
-                "--show-timings",
-            ],
+            root,
+            &["--match-contract", &stateless_contract],
+            &stateless_cases,
+            None,
+            &seed,
         ))?;
 
         section(&format!("{name}: hegel-sol stateful property"));
-        run(runner_cmd(
+        run(property_cmd(
             &runner,
-            [
-                "--root",
-                root,
-                "--match-contract",
-                &stateful_contract,
-                "--test-cases",
-                &stateful_cases,
-                "--step-count",
-                &stateful_steps,
-                "--seed",
-                &seed,
-                "--database",
-                "off",
-                "--show-timings",
-            ],
+            root,
+            &["--match-contract", &stateful_contract],
+            &stateful_cases,
+            Some(&stateful_steps),
+            &seed,
         ))?;
     }
 
     // Solady's own ERC20 suite, unchanged: the compatibility check that matters
     // is whether a suite written for Forge runs as it does under Forge.
     section("Solady upstream ERC20 suite: Forge");
-    let mut baseline = Command::new("forge");
-    baseline.args([
-        "test",
-        "--root",
+    run(forge_fuzz_cmd(
         SOLADY_ROOT,
-        "--match-contract",
-        "^(ERC20Test|ERC20ForPermit2Test)$",
-        "--fuzz-runs",
+        &["--match-contract", "^(ERC20Test|ERC20ForPermit2Test)$"],
         &stateless_cases,
-        "--fuzz-seed",
         &seed,
-    ]);
-    baseline.current_dir(workspace());
-    run(baseline)?;
+    ))?;
     for contract in ["ERC20Test", "ERC20ForPermit2Test"] {
         section(&format!(
             "Solady upstream ERC20 suite: hegel-sol {contract}"
         ));
-        run(runner_cmd(
+        run(property_cmd(
             &runner,
-            [
-                "--root",
-                SOLADY_ROOT,
-                "--match-contract",
-                contract,
-                "--test-cases",
-                &stateless_cases,
-                "--seed",
-                &seed,
-                "--database",
-                "off",
-                "--show-timings",
-            ],
+            SOLADY_ROOT,
+            &["--match-contract", contract],
+            &stateless_cases,
+            None,
+            &seed,
         ))?;
     }
 
@@ -477,88 +434,57 @@ fn validate(args: Validate) -> Result<()> {
     baseline.current_dir(workspace());
     run(baseline)?;
     section("Solady upstream ERC20 invariant: hegel-sol");
-    run(runner_cmd(
+    run(property_cmd(
         &runner,
-        [
-            "--root",
-            SOLADY_ROOT,
+        SOLADY_ROOT,
+        &[
             "--match-contract",
             "ERC20Invariants",
             "--match-test",
             "stateful",
-            "--test-cases",
-            &stateful_cases,
-            "--step-count",
-            &stateful_steps,
-            "--seed",
-            &seed,
-            "--database",
-            "off",
-            "--show-timings",
         ],
+        &stateful_cases,
+        Some(&stateful_steps),
+        &seed,
     ))?;
 
     section("Uniswap v2 core: Forge swap baseline");
-    let mut baseline = Command::new("forge");
-    baseline.args([
-        "test",
-        "--root",
-        "crates/tests-integration/projects/real-world/uniswap-v2",
-        "--match-contract",
-        "UniswapV2ValidationTest",
-        "--match-test",
-        "test_swap_preserves_product",
-        "--fuzz-runs",
-        &stateless_cases,
-        "--fuzz-seed",
-        &seed,
-    ]);
-    baseline.current_dir(workspace());
-    run(baseline)?;
-
-    section("Uniswap v2 core: hegel-sol swap property");
-    run(runner_cmd(
-        &runner,
-        [
-            "--root",
-            "crates/tests-integration/projects/real-world/uniswap-v2",
+    run(forge_fuzz_cmd(
+        UNISWAP_ROOT,
+        &[
+            "--match-contract",
+            "UniswapV2ValidationTest",
             "--match-test",
             "test_swap_preserves_product",
-            "--test-cases",
-            &stateless_cases,
-            "--seed",
-            &seed,
-            "--database",
-            "off",
-            "--show-timings",
         ],
+        &stateless_cases,
+        &seed,
+    ))?;
+
+    section("Uniswap v2 core: hegel-sol swap property");
+    run(property_cmd(
+        &runner,
+        UNISWAP_ROOT,
+        &["--match-test", "test_swap_preserves_product"],
+        &stateless_cases,
+        None,
+        &seed,
     ))?;
 
     section("Uniswap v2 core: hegel-sol stateful property");
-    run(runner_cmd(
+    run(property_cmd(
         &runner,
-        [
-            "--root",
-            "crates/tests-integration/projects/real-world/uniswap-v2",
-            "--match-test",
-            "stateful",
-            "--test-cases",
-            &stateful_cases,
-            "--step-count",
-            &stateful_steps,
-            "--seed",
-            &seed,
-            "--database",
-            "off",
-            "--show-timings",
-        ],
+        UNISWAP_ROOT,
+        &["--match-test", "stateful"],
+        &stateful_cases,
+        Some(&stateful_steps),
+        &seed,
     ))?;
     Ok(())
 }
 
 fn profile(args: Profile) -> Result<()> {
-    run(cargo(["build", "--release", "--locked", "-p", "hegel-sol"]))?;
-    let runner = workspace().join("target/release/hegel-sol");
+    let runner = release_runner()?;
     let cases = args.cases.to_string();
     let steps = args.steps.to_string();
     let seed = args.seed.to_string();
@@ -571,16 +497,8 @@ fn profile(args: Profile) -> Result<()> {
         ProfileWorkload::OpenzeppelinStateful => {
             (REAL_WORLD_ROOT, "OpenZeppelinERC20StatefulTest", true)
         }
-        ProfileWorkload::UniswapStateless => (
-            "crates/tests-integration/projects/real-world/uniswap-v2",
-            "UniswapV2ValidationTest",
-            false,
-        ),
-        ProfileWorkload::UniswapStateful => (
-            "crates/tests-integration/projects/real-world/uniswap-v2",
-            "UniswapV2ValidationTest",
-            true,
-        ),
+        ProfileWorkload::UniswapStateless => (UNISWAP_ROOT, "UniswapV2ValidationTest", false),
+        ProfileWorkload::UniswapStateful => (UNISWAP_ROOT, "UniswapV2ValidationTest", true),
     };
     let mut cmd = Command::new("/usr/bin/time");
     cmd.args(["--verbose", "--output"])
@@ -655,6 +573,37 @@ fn cargo<const N: usize>(args: [&str; N]) -> Command {
 fn forge<const N: usize>(args: [&str; N], project: &Path) -> Command {
     let mut cmd = Command::new("forge");
     cmd.args(args).arg(project).current_dir(workspace());
+    cmd
+}
+
+fn release_runner() -> Result<PathBuf> {
+    run(cargo(["build", "--release", "--locked", "-p", "hegel-sol"]))?;
+    Ok(workspace().join("target/release/hegel-sol"))
+}
+
+fn forge_fuzz_cmd(root: &str, selection: &[&str], cases: &str, seed: &str) -> Command {
+    let mut cmd = forge(["test", "--root"], Path::new(root));
+    cmd.args(selection)
+        .args(["--fuzz-runs", cases, "--fuzz-seed", seed]);
+    cmd
+}
+
+// Validation runs use a fixed seed and no saved examples so prior runs cannot
+// change the workload. A step budget is supplied only for stateful properties.
+fn property_cmd(
+    runner: &Path,
+    root: &str,
+    selection: &[&str],
+    cases: &str,
+    steps: Option<&str>,
+    seed: &str,
+) -> Command {
+    let mut cmd = runner_cmd(runner, ["--root", root]);
+    cmd.args(selection).args(["--test-cases", cases]);
+    if let Some(steps) = steps {
+        cmd.args(["--step-count", steps]);
+    }
+    cmd.args(["--seed", seed, "--database", "off", "--show-timings"]);
     cmd
 }
 
