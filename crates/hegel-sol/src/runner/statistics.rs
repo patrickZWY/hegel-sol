@@ -4,11 +4,11 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::engine::Status;
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExampleStatistics {
     pub executed: u64,
     pub valid: u64,
@@ -17,7 +17,7 @@ pub struct ExampleStatistics {
     pub failed: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HandlerStatistics {
     pub calls: u64,
     pub completed: u64,
@@ -27,7 +27,7 @@ pub struct HandlerStatistics {
     pub overrun: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunStatistics {
     pub examples: ExampleStatistics,
     pub handlers: BTreeMap<String, HandlerStatistics>,
@@ -35,9 +35,9 @@ pub struct RunStatistics {
     pub block_advances: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
 }
 
@@ -85,7 +85,12 @@ impl RunStatistics {
 
     pub(super) fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let mut add = |code, message| diagnostics.push(Diagnostic { code, message });
+        let mut add = |code: &str, message| {
+            diagnostics.push(Diagnostic {
+                code: code.into(),
+                message,
+            })
+        };
         let examples = &self.examples;
         if examples.valid == 0 && examples.failed == 0 {
             add(

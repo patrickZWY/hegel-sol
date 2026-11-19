@@ -132,6 +132,7 @@ Keep a run for later inspection or CI artifacts with a new output directory:
 
 ```sh
 hegel-sol test --output-dir .hegel/runs/local-001
+hegel-sol report .hegel/runs/local-001 --failed
 ```
 
 The [run archive](docs/archives.md) includes versions, configuration, the full JSON

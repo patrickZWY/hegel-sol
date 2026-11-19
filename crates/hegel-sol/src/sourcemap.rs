@@ -8,12 +8,12 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A position in a Solidity source file. Paths are relative to the project root
 /// and both coordinates are one-based, matching how editors and compilers report
 /// them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceLocation {
     pub path: String,
     pub line: usize,

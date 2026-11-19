@@ -27,6 +27,28 @@ regardless of whether that flag was supplied. Archiving does not add anything to
 stdout or change the existing property verdict and exit code. Failure to write an
 archive is a command error and exits unsuccessfully.
 
+## Offline viewing
+
+```sh
+hegel-sol report .hegel/runs/local-001
+hegel-sol report .hegel/runs/local-001 --failed
+hegel-sol report .hegel/runs/local-001 --failed --match-test Vault
+```
+
+The viewer reads the archive without compiling, executing, or requiring the original
+project. It shows the saved state, project, runner version, overall verdict counts,
+warnings, and selected test details with execution statistics, diagnostics, and replay
+commands. `--match-test` matches a case-sensitive substring of the full `Contract.test`
+name. Filters affect test details only; the overview always describes the entire run.
+An empty selection is reported explicitly.
+
+Viewing a complete archive returns exit code zero even if it contains failed properties.
+A saved fatal run error is also a successful inspection and displays its error message.
+Missing or malformed artifacts, inconsistent summaries or failure entries, unsupported
+archive or report versions, and `running` archives return a nonzero exit code. All listed
+failure artifacts are checked before filtering. Artifact symlinks must stay within the
+archive directory. The viewer displays saved replay commands but never executes them.
+
 ## Manifest version 1
 
 `manifest.json` contains:

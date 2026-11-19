@@ -501,6 +501,20 @@ failure replay data; it is not a source or environment snapshot. Replay commands
 the invocation directory and engine profile. The [archive format](archives.md) has its
 own version, independent of the unchanged JSON report schema.
 
+### 2026-11-19: offline archive inspection
+
+The CLI's [archive reader](../crates/hegel-sol/src/archive_report.rs) validates saved
+artifacts before presenting them, without invoking discovery, the compiler, or the
+execution runner. Archive and report versions are checked independently. Summaries and
+numbered failure copies must agree with the full report, including entries hidden by
+filters. The completion marker determines whether a result can be viewed; a saved fatal
+run error remains distinct from a property verdict.
+
+Live and offline output share the test-section renderer. Replay commands come from the
+archive rather than being reconstructed from the viewer's environment. Inspection exit
+codes describe readability, not the archived property's success. Diagnostic codes are
+owned strings so future additive codes remain readable without a schema change.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently

@@ -8,14 +8,12 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use hegel_sol::{
     discovery::{Conventions, STATEFUL_SUFFIX},
-    inspector::Draw,
-    runner::{
-        Options, SECONDS_PER_BLOCK, Shard, TestReport, TestStatus, list_project, run_project,
-    },
+    runner::{Options, Shard, TestReport, TestStatus, list_project, run_project},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod archive;
+mod archive_report;
 mod report_sections;
 
 const JSON_SCHEMA_VERSION: u32 = 1;
@@ -29,7 +27,7 @@ struct JsonReport<'a> {
     tests: &'a [TestReport],
 }
 
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Summary {
     passed: usize,
     failed: usize,
@@ -51,7 +49,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Build and run Solidity property tests.
-    Test(TestArgs),
+    Test(Box<TestArgs>),
+    /// Inspect a saved run without compiling or executing its project.
+    Report(archive_report::ReportArgs),
 }
 
 #[derive(clap::Args)]
@@ -156,7 +156,8 @@ impl Verbosity {
 fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
     let result = match command {
-        Command::Test(args) => run(args),
+        Command::Test(args) => run(*args),
+        Command::Report(args) => archive_report::run(args).map(|()| false),
     };
     match result {
         Ok(failed) => {
@@ -282,47 +283,19 @@ fn resolve_database(root: &Path, value: &str) -> String {
 
 fn print_reports(reports: &[TestReport], args: &TestArgs) {
     for report in reports {
-        let timing = if args.show_timings {
-            format!(" ({} ms)", report.duration_ms)
-        } else {
-            String::new()
-        };
-        match report.status {
-            TestStatus::Passed => println!("PASS {}{timing}", report.test),
-            TestStatus::Invalid => println!("INVALID {}{timing}", report.test),
-            TestStatus::Overrun => println!("OVERRUN {}{timing}", report.test),
-            TestStatus::Failed => {
-                println!("FAIL {}{timing}", report.test);
-                if let Some(origin) = &report.origin {
-                    println!("  {origin}");
-                }
-                if let Some(source) = &report.source {
-                    println!("  at {}:{}:{}", source.path, source.line, source.column);
-                }
-                if let Some(caveat) = &report.caveat {
-                    println!("  caveat: {caveat}");
-                }
-                print_counterexample(report);
-                for line in &report.console {
-                    println!("  {line}");
-                }
-                for note in &report.notes {
-                    println!("  note: {note}");
-                }
-                if args.show_statistics {
-                    print_events(report);
-                }
-                if let Some(blob) = &report.blob {
-                    println!("  reproduce: {}", reproduce_command(args, report, blob));
-                }
-            }
-        }
-        if args.show_statistics {
-            println!("{}", report_sections::statistics(&report.statistics));
-        }
-        if !report.diagnostics.is_empty() {
-            println!("{}", report_sections::diagnostics(&report.diagnostics));
-        }
+        let command = report
+            .blob
+            .as_deref()
+            .map(|blob| reproduce_command(args, report, blob));
+        println!(
+            "{}",
+            report_sections::test(
+                report,
+                args.show_timings,
+                args.show_statistics,
+                command.as_deref()
+            )
+        );
     }
 }
 
@@ -393,69 +366,6 @@ fn shell_quote(value: &str) -> String {
         value.to_owned()
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
-/// Print the minimal example as something close to the Solidity that produced
-/// it, so a counterexample can be pasted into a test.
-///
-/// A stateful step is traced as its sender, its arguments, and then the handler
-/// they fed, so the handler line closes the call with the arguments gathered
-/// since the previous one. Draws that no handler consumed, which is every draw
-/// of a stateless test, are printed as declarations.
-fn print_counterexample(report: &TestReport) {
-    if report.trace.is_empty() {
-        return;
-    }
-    println!("  minimal counterexample:");
-    let mut sender = None;
-    let mut pending: Vec<&Draw> = Vec::new();
-    for draw in &report.trace {
-        match draw.kind.as_str() {
-            "event" => {}
-            "sender" => sender = Some(draw.value.as_str()),
-            "rule" => {
-                if let Some(sender) = sender.take() {
-                    println!("    vm.prank({sender});");
-                }
-                let arguments = pending
-                    .drain(..)
-                    .map(|draw| draw.value.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                println!("    {}({arguments});", draw.name);
-            }
-            "advance" => {
-                // The step's one draw is how many blocks the chain skipped.
-                let blocks = pending
-                    .drain(..)
-                    .next_back()
-                    .map_or_else(|| "1".to_owned(), |draw| draw.value.clone());
-                println!(
-                    "    vm.roll(block.number + {blocks}); vm.warp(block.timestamp + {blocks} * \
-                     {SECONDS_PER_BLOCK});"
-                );
-            }
-            _ => pending.push(draw),
-        }
-    }
-    for draw in pending {
-        println!("    {} {} = {};", draw.kind, draw.name, draw.value);
-    }
-}
-
-fn print_events(report: &TestReport) {
-    let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-    for event in report.trace.iter().filter(|draw| draw.kind == "event") {
-        *counts.entry(&event.name).or_default() += 1;
-    }
-    println!("  events (reported example only):");
-    if counts.is_empty() {
-        println!("    no events recorded");
-    } else {
-        for (event, count) in counts {
-            println!("    {event}: {count}");
-        }
     }
 }
 
@@ -533,9 +443,9 @@ fn parse_jobs(value: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hegel_sol::sourcemap::SourceLocation;
+    use hegel_sol::{inspector::Draw, sourcemap::SourceLocation};
 
-    fn populated_report() -> TestReport {
+    pub(super) fn populated_report() -> TestReport {
         TestReport {
             test: "Example.test_thing".into(),
             status: TestStatus::Failed,
@@ -560,7 +470,7 @@ mod tests {
                 ..Default::default()
             },
             diagnostics: vec![hegel_sol::runner::Diagnostic {
-                code: "handler_not_called",
+                code: "handler_not_called".into(),
                 message: "deposit was never called".into(),
             }],
         }
@@ -672,8 +582,11 @@ mod tests {
             ["hegel-sol", "test"]
                 .into_iter()
                 .chain(extra.iter().copied()),
-        );
-        args
+        )
+        else {
+            panic!("expected test arguments")
+        };
+        *args
     }
 
     #[test]

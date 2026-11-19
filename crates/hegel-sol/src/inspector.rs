@@ -14,7 +14,7 @@ use revm::{
     },
     primitives::Bytes,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     engine::{
@@ -45,7 +45,7 @@ const INVALID: u8 = 0xfe;
 /// empty for every type, which is what Foundry hands back too.
 static MATCHED_REVERT_OUTPUT: [u8; 8192] = [0; 8192];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draw {
     pub name: String,
     pub kind: String,

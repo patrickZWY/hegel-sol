@@ -225,8 +225,11 @@ mod tests {
             ["hegel-sol", "test"]
                 .into_iter()
                 .chain(extra.iter().copied()),
-        );
-        args
+        )
+        else {
+            panic!("expected test arguments")
+        };
+        *args
     }
 
     fn project(path: &str) -> String {

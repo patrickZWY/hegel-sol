@@ -12,7 +12,7 @@ use alloy_json_abi::Function;
 use alloy_primitives::{Address, Bytes, hex};
 use anyhow::{Context as _, Result, anyhow, bail};
 use revm::{Context, InspectCommitEvm, MainBuilder, MainContext, context::result::ExecutionResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     artifacts::{Contract, FoundryProject, Project},
@@ -159,7 +159,7 @@ impl Shard {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TestStatus {
     Passed,
@@ -168,7 +168,7 @@ pub enum TestStatus {
     Overrun,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestReport {
     pub test: String,
     pub status: TestStatus,

@@ -11,7 +11,9 @@ commit.
   runner options, the full JSON report, and numbered failure artifacts with replay
   commands. Existing directories are refused. A manifest distinguishes complete
   reports, fatal run errors, and interrupted writes. Replay commands retain the
-  original working directory and selected engine profile.
+  original working directory and selected engine profile. `hegel-sol report DIR`
+  views saved results offline, with `--failed` and `--match-test` filters. Viewing
+  failures or saved run errors succeeds; incomplete or invalid archives fail.
 
 - Reports include execution counts and per-handler activity, with diagnostics for
   unexercised handlers and excessive input rejection. `--show-statistics` now shows
