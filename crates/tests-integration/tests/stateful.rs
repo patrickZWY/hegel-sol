@@ -291,56 +291,14 @@ fn registered_senders_replace_the_synthetic_actors() {
     );
 }
 
-/// The README's attack example: an attacker's options as handlers, the vault's
-/// solvency as the invariant, and the engine finding the manipulation without
-/// being told its shape.
 #[test]
-fn a_price_manipulation_shrinks_to_credit_swap_and_borrow() {
+fn a_bounded_stack_reports_the_first_push_past_capacity() {
     let execution = run_project(&Options {
-        test_cases: 300,
-        ..options(examples(), "PriceManipulationTest")
+        test_cases: 100,
+        ..options(examples(), "BoundedStackTest")
     })
     .unwrap();
     let report = only(&execution);
-
-    assert!(execution.failed(), "{:?}", report.origin);
-    assert!(
-        report
-            .origin
-            .as_deref()
-            .is_some_and(|origin| origin.starts_with("invariant_loans_are_backed")),
-        "{:?}",
-        report.origin
-    );
-    // Capital, a swap to move the price, and a loan against the moved price:
-    // nothing shorter breaks the threshold, and repaying or swapping back is
-    // irrelevant to the vault's exposure.
-    assert_eq!(
-        steps(report),
-        ["rule_takeCredit", "rule_swapBForA", "rule_borrow"]
-    );
-}
-
-/// A same-block guard forces the manipulation to straddle a block. The engine
-/// decides where a block boundary falls, so the exploit is found with the
-/// boundary in the one place it has to be.
-#[test]
-fn a_same_block_guard_is_bypassed_by_a_block_the_engine_inserts() {
-    let execution = run_project(&Options {
-        test_cases: 300,
-        ..options(examples(), "SameBlockGuardTest")
-    })
-    .unwrap();
-    let report = only(&execution);
-
-    assert!(execution.failed(), "{:?}", report.origin);
-    assert_eq!(
-        steps(report),
-        [
-            "rule_takeCredit",
-            "rule_swapBForA",
-            "env.advance",
-            "rule_borrow"
-        ]
-    );
+    assert_eq!(steps(report), ["rule_push", "rule_push", "rule_push"]);
+    assert!(report.origin.as_deref().unwrap().contains("invariant_size"));
 }

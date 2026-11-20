@@ -48,9 +48,13 @@ commit.
 - `hegel.target` may be observed more than once per example, as an invariant checked
   after every step does; the largest score under each label is what guides the search.
   Previously a second observation aborted the run.
-- A worked attack-search example, `examples/test/PriceManipulation.t.sol`, shows a
-  flash-loan style price manipulation found from the vault's solvency invariant alone,
-  with and without a same-block guard. `cargo x demo` runs it as a fourth step.
+- `hegel-sol morgue --root PROJECT` opens a desktop property-testing workspace with
+  an opening conversation about your code. Inspect traces, navigate the full source,
+  replay failures, and draft Solidity tests alongside the same conversation.
+  In an active conversation, the agent reviews each new run against earlier evidence.
+  `test --exact-test Contract.test` selects the full name printed by `--list`.
+- The fourth demo shrinks a bounded stack capacity error to three pushes. The examples
+  also include overflow-safe averaging of two bytes.
 
 ### Fixes
 

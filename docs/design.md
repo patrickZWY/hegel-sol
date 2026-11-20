@@ -4,6 +4,29 @@ How the runner is built and why. The API facts below were gathered on 2026-09-15
 the versions named and are what the code relies on; the decision log at the end records
 what was decided since, with dates, so a later reader can tell a constraint from a habit.
 
+## Design principle: gradual discovery and verification
+
+The specification is part of the investigation. Keep the user's stated intent, the
+agent's hypotheses, and the runner's observations distinguishable. Each may lead us to
+revise a property, a generator, our understanding of the implementation, or a previous
+interpretation. Preserve the evidence that prompted the revision.
+
+A passing search describes the examples exercised. A counterexample establishes a
+discrepancy under its recorded conditions. Deciding which behavior is intended may
+require another observation or a decision from the user. Apply this same discipline
+to the agent's own reasoning on every iteration.
+
+## Design principle: Old Hollywood suspense
+
+[Morgue](morgue.md) takes its visual direction from classic Hollywood horror and
+Hitchcock's staging of suspense. An open door, a long shadow, and a staircase invite
+the first question. Frame the scene with near-black, light it with ivory, and use a
+thin red cut to mark the edge. Let the title card recede once the conversation begins.
+
+Reserve dramatic composition for the frame. Keep source, traces, and agent replies
+steady and legible. Verdicts carry text labels, focus remains visible, and selecting
+evidence always takes precedence over a decorative effect.
+
 ## Core constraint
 
 Solidity runs inside the EVM and cannot link libhegel. The "binding" is therefore a host
@@ -400,22 +423,14 @@ frame at depth one, and the inspector applied an open prank to every frame, so a
 now records the depth it first sees in each transaction and pranks only frames below
 it.
 
-The worked example encodes a price manipulation the way a model checker would, but as a
-state predicate rather than a trace pattern: the attacker's options are handlers sized
-as percentages of what they hold, the vault's solvency at a reference price is the
-invariant, and `hegel.target` reports the shortfall so the search climbs. The runner now
-keeps the best score per label for the engine, because an invariant observes on every
-check and the engine accepts one observation per label per example. The credit line in
-the example is deliberately not a same-transaction flash loan: a step is one
-transaction, and the guarded variant's lesson is that holding the position across a
-block is still an exploit, only a dearer one. Forge's invariant mode cannot run the
-example as a baseline, because without `targetContracts()` it fuzzes every deployed
-contract including the token's `mint`, which is a different model, not a weaker search.
+The runner keeps the best score per label for the engine, because an invariant
+observes on every check and the engine accepts one observation per label per example.
+The original demonstration was retired in the 2026-11-19 interactive testing revision.
 
 ### 2026-11-18: benign validation and selector registration
 
 New validation and benchmark work uses arithmetic boundaries, collections, token
-accounting, and deterministic replay. Existing attack-search demos remain available.
+accounting, and deterministic replay.
 Failing properties introduced for measurement must be identified as deliberately seeded
 correctness defects; they are not evidence of vulnerabilities in upstream contracts.
 
@@ -515,6 +530,18 @@ archive rather than being reconstructed from the viewer's environment. Inspectio
 codes describe readability, not the archived property's success. Diagnostic codes are
 owned strings so future additive codes remain readable without a schema change.
 
+### 2026-11-19: ordinary correctness evidence
+
+The [inventory campaign](../crates/tests-integration/projects/correctness/README.md)
+uses a local stale-total defect and a corrected control. Its fixture lives separately
+from the pinned ecosystem projects and uses no token or financial model. Both runners
+exercise the same actions and invariant. Hegel failures are replayed in a fresh process,
+and their actual action arguments are independently executed under Forge. Sender values
+can be omitted from that confirmation because the inventory actions do not read them.
+The campaign records misses, rejects unexpected failures, and preserves reports and run
+archives. Process timing includes shrinking and reporting; it does not claim to isolate
+search or shrink phases. `cargo x test` includes the five-seed campaign.
+
 ## Deferred work
 
 - Extend ecosystem validation to more properties, failing cases with independently
@@ -529,3 +556,32 @@ owned strings so future additive codes remain readable without a schema change.
   trace rather than inside their step, emitted events are not reported, and a bounded
   temporal property over the trace still has to be hand-rolled as contract state. A
   monitor over the runner's own step record would cover all three.
+
+### 2026-11-19: interactive property testing
+
+[Morgue](morgue.md) drives discovery, execution, replay, and archive validation through
+the runner executable. Tk supplies a local desktop interface. A user-configured agent
+process receives the selected source and conversation over stdin. Users review and edit
+the proposed Solidity before saving a test and exercising it through normal discovery.
+The bounded-stack and byte-average examples replace the earlier price manipulation demo.
+
+### 2026-11-19: conversation and source navigation in Morgue
+
+[Morgue](morgue.md) begins with a local question about the code. Property discovery is
+deferred until requested. A persistent conversation shares the selected run, trace
+step, and source with the agent. Failure locations come from the archived report;
+handler navigation uses unique declarations in the current checkout.
+
+### 2026-11-19: run evidence feeds the next investigation
+
+In an active conversation Morgue returns each new search or replay to the agent for
+one review. The agent receives its earlier answers and archive-indexed observations.
+The next question can challenge the review itself. The runner owns execution verdicts;
+the agent proposes interpretations and follow-up experiments.
+
+### 2026-11-19: the Morgue title card
+
+The desktop opens on an original, static staircase and doorway composition. Asking a
+question or opening a work pane reduces the card to a masthead and gives the vertical
+space back to the investigation. The same palette carries through the console and
+source viewer.

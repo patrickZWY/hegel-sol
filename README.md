@@ -139,24 +139,12 @@ The [run archive](docs/archives.md) includes versions, configuration, the full J
 report, and failure replay information. Existing directories are never overwritten;
 check `manifest.json` for completion or a saved run error.
 
-## Searching for an attack
+## Interactive testing
 
-A stateful test is a nondeterministic loop: each `rule_` function or registered target
-is an action, its arguments are chosen by the engine, and the invariant is checked
-between actions. That is enough to search for exploits rather than only for bugs.
-[`examples/test/PriceManipulation.t.sol`](examples/test/PriceManipulation.t.sol) is a
-worked case: a vault that prices collateral by an AMM's spot price, an attacker whose
-options are the handlers, and one invariant, that no loan exceeds the liquidation
-threshold at the honest price. Three habits make such a test work:
-
-- Assert the consequence, not the exploit's shape. The vault's solvency is the
-  invariant; the engine finds the sequence that breaks it.
-- Record the facts a pattern needs as contract state, such as the block of the last
-  swap, and let the invariant read them back.
-- Give the engine the environment too. `maxBlockAdvance()` on the contract, or
-  `--max-block-advance`, lets it insert block boundaries, which is how the example
-  gets past a same-block guard; `targetSenders()` names the accounts that act; and
-  `hegel.target(label, score)` steers the search toward larger damage.
+Launch `hegel-sol morgue --root examples` and tell the agent which code you want to
+work on. Try “Walk me through ByteMath.average.” The conversation stays open while you
+read the source, explore a failing trace, or turn a suggested property into a test.
+See the [Morgue guide](docs/morgue.md) for agent setup and a walkthrough.
 
 ## Foundry compatibility
 
@@ -174,6 +162,10 @@ standalone runner, not a Foundry fork. Solady's own ERC20 suite and invariant, a
 pinned OpenZeppelin, Solady, and Uniswap v2 properties, run under both Forge and
 hegel-sol in CI; the [validation record][real-world] has the results.
 
+The [inventory correctness campaign][correctness]
+checks finding, shrinking, and replaying a deliberately seeded stale-total error, with
+independent Forge confirmation and a corrected passing control.
+
 ## More
 
 - [`CHANGELOG.md`](CHANGELOG.md): what changed for users in each release.
@@ -183,3 +175,5 @@ hegel-sol in CI; the [validation record][real-world] has the results.
 [releases]: https://github.com/patrickZWY/hegel-sol/releases/latest
 [reporting]: docs/reporting.md
 [real-world]: crates/tests-integration/projects/real-world/README.md
+
+[correctness]: crates/tests-integration/projects/correctness/README.md

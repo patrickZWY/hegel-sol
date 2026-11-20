@@ -48,6 +48,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Open the interactive testing workspace (requires Python 3 and Tk).
+    Morgue {
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
     /// Build and run Solidity property tests.
     Test(Box<TestArgs>),
     /// Inspect a saved run without compiling or executing its project.
@@ -63,6 +68,9 @@ struct TestArgs {
     match_contract: Option<String>,
     #[arg(long)]
     match_test: Option<String>,
+    /// Select one fully qualified property name as printed by --list.
+    #[arg(long)]
+    exact_test: Option<String>,
     #[arg(long, default_value_t = 100)]
     test_cases: u64,
     #[arg(long)]
@@ -156,6 +164,7 @@ impl Verbosity {
 fn main() -> ExitCode {
     let Cli { command } = Cli::parse();
     let result = match command {
+        Command::Morgue { root } => morgue(root).map(|()| false),
         Command::Test(args) => run(*args),
         Command::Report(args) => archive_report::run(args).map(|()| false),
     };
@@ -193,6 +202,7 @@ fn run(args: TestArgs) -> anyhow::Result<bool> {
         root: args.root.clone(),
         match_contract: args.match_contract.clone(),
         match_test: args.match_test.clone(),
+        exact_test: args.exact_test.clone(),
         test_cases: args.test_cases,
         seed: args.seed,
         database,
@@ -324,6 +334,9 @@ fn reproduce_command(args: &TestArgs, report: &TestReport, blob: &str) -> String
         .unwrap_or((report.test.as_str(), STATEFUL_SUFFIX));
     push("match-contract", contract);
     push("match-test", function);
+    if args.exact_test.is_some() {
+        push("exact-test", &report.test);
+    }
     let defaults = Options::default();
     if args.step_count != defaults.step_count {
         push("step-count", &args.step_count.to_string());
@@ -438,6 +451,22 @@ fn parse_jobs(value: &str) -> Result<usize, String> {
         return Err("jobs must be greater than zero".to_owned());
     }
     Ok(jobs)
+}
+
+fn morgue(root: PathBuf) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let status = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(include_str!("morgue.py"))
+        .arg(env::current_exe()?)
+        .arg(
+            root.canonicalize()
+                .context("check the --root project path")?,
+        )
+        .status()
+        .context("install Python 3 with Tk to use morgue")?;
+    anyhow::ensure!(status.success(), "morgue exited with {status}");
+    Ok(())
 }
 
 #[cfg(test)]

@@ -4,8 +4,12 @@ pragma solidity ^0.8.20;
 /// @notice Workload for `cargo x bench`: wide generated collections.
 contract BenchmarkCollectionsTest {
     function testFuzz_large_collections(bytes calldata data, uint256[] calldata values) public pure {
-        bytes32 witness = keccak256(abi.encode(data, values));
-        assert(witness != bytes32(0));
+        (bytes memory decoded, uint256[] memory numbers) = abi.decode(abi.encode(data, values), (bytes, uint256[]));
+        assert(keccak256(decoded) == keccak256(data));
+        assert(numbers.length == values.length);
+        for (uint256 i; i < values.length; i++) {
+            assert(numbers[i] == values[i]);
+        }
     }
 }
 

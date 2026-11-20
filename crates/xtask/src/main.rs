@@ -14,6 +14,8 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 
+mod seeded;
+
 const WORKSPACE: &str = env!("CARGO_WORKSPACE_DIR");
 
 /// Directories that never contain a Foundry project of ours.
@@ -46,6 +48,8 @@ enum Cmd {
     Build(Build),
     /// Run unit and integration tests.
     Test(Test),
+    /// Exercise the desktop and agent workflows on a local display.
+    MorgueSmoke,
     /// Run the deterministic feature demo against the showcase project.
     Demo,
     /// Run the release-mode scaling workloads in `crates/xtask/benchmarks/`.
@@ -92,16 +96,19 @@ struct Bench {
 
 #[derive(Parser)]
 struct Validate {
+    /// Run only the inventory correctness campaign, saving evidence in a new directory.
+    #[arg(long)]
+    seeded_output: Option<PathBuf>,
     /// Generated stateless cases for both runners.
     #[arg(long, default_value_t = 1000)]
     stateless_cases: u64,
-    /// Generated stateful cases for hegel-sol.
+    /// Generated stateful cases for both runners.
     #[arg(long, default_value_t = 100)]
     stateful_cases: u64,
-    /// Steps per stateful case for hegel-sol.
+    /// Steps per stateful case.
     #[arg(long, default_value_t = 50)]
     stateful_steps: u64,
-    /// Seed passed to both runners; their generated inputs can still differ.
+    /// Compatibility seed; the seeded campaign uses 1, 17, 42, 123, 999.
     #[arg(long, default_value_t = 17)]
     seed: u64,
 }
@@ -143,6 +150,13 @@ fn main() -> Result<()> {
         Cmd::Lint(args) => lint(args),
         Cmd::Build(args) => build(args),
         Cmd::Test(args) => test(args),
+        Cmd::MorgueSmoke => {
+            run(cargo(["build", "--locked", "-p", "hegel-sol"]))?;
+            let mut cmd = Command::new("python3");
+            cmd.current_dir(workspace())
+                .arg("crates/xtask/morgue_smoke.py");
+            run(cmd)
+        }
         Cmd::Demo => demo(),
         Cmd::Bench(args) => bench(args),
         Cmd::Validate(args) => validate(args),
@@ -220,6 +234,17 @@ fn test(args: Test) -> Result<()> {
     }
     run(cmd)?;
     validate(Validate {
+        seeded_output: None,
+        stateless_cases: 1000,
+        stateful_cases: 100,
+        stateful_steps: 50,
+        seed: 17,
+    })?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    validate(Validate {
+        seeded_output: Some(std::env::temp_dir().join(format!("hegel-inventory-{stamp}"))),
         stateless_cases: 1000,
         stateful_cases: 100,
         stateful_steps: 50,
@@ -277,13 +302,13 @@ fn demo() -> Result<()> {
             .chain(["--match-contract", "CustomErrorTest", "--test-cases", "1"]),
     )?;
 
-    section("4/4 Attack search: a flash-loan price manipulation across a block boundary");
+    section("4/4 Bounded stack: shrink a capacity error to three pushes");
     expect_failure(
         &runner,
-        "SameBlockGuardTest.stateful",
+        "BoundedStackTest.stateful",
         common.iter().copied().chain([
             "--match-contract",
-            "SameBlockGuardTest",
+            "BoundedStackTest",
             "--test-cases",
             "300",
             "--actors",
@@ -351,6 +376,9 @@ const UNISWAP_ROOT: &str = "crates/tests-integration/projects/real-world/uniswap
 
 fn validate(args: Validate) -> Result<()> {
     let runner = release_runner()?;
+    if let Some(output) = &args.seeded_output {
+        return seeded::campaign(&runner, &args, output);
+    }
     let stateless_cases = args.stateless_cases.to_string();
     let stateful_cases = args.stateful_cases.to_string();
     let stateful_steps = args.stateful_steps.to_string();

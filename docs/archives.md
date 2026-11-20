@@ -66,7 +66,8 @@ archive directory. The viewer displays saved replay commands but never executes 
 - `failures`: ordered paths to the failure artifacts; empty when there are none.
 - `error`: `"error.json"` for a run error, otherwise `null`.
 
-The options include selection filters, case and step budgets, generation limits, seed,
+The options include selection filters (including the optional full name in `exact_test`),
+case and step budgets, generation limits, seed,
 profile, reproduce blob, phases, verbosity, jobs, shard, fail-fast, actor count, block
 advancement, revert policy, coverage feedback, and naming conventions. Phase flags are
 a bitmask: explicit `1`, reuse `2`, generate `4`, target `8`, shrink `16`. A shard stores

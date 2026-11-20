@@ -49,6 +49,7 @@ pub struct Options {
     pub root: PathBuf,
     pub match_contract: Option<String>,
     pub match_test: Option<String>,
+    pub exact_test: Option<String>,
     pub test_cases: u64,
     pub seed: Option<u64>,
     pub database: Option<String>,
@@ -81,6 +82,7 @@ impl Default for Options {
             root: PathBuf::from("."),
             match_contract: None,
             match_test: None,
+            exact_test: None,
             test_cases: 100,
             seed: None,
             database: None,
@@ -275,6 +277,9 @@ pub fn list_project(options: &Options) -> Result<Vec<String>> {
 
 fn select<'a>(contracts: &'a [Contract], options: &'a Options) -> Result<Vec<DiscoveredTest<'a>>> {
     let mut discovered = discover_tests(contracts, options);
+    if let Some(name) = &options.exact_test {
+        discovered.retain(|test| test.name(&options.conventions) == *name);
+    }
     if let Some(shard) = options.shard {
         discovered.retain(|test| shard.contains(&test.id()));
     }
